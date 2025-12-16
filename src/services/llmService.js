@@ -2,9 +2,15 @@ const OpenAI = require('openai');
 
 class LLMService {
   constructor() {
-    this.openai = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
-    });
+    // Only initialize OpenAI client if API key is available
+    if (process.env.OPENAI_API_KEY) {
+      this.openai = new OpenAI({
+        apiKey: process.env.OPENAI_API_KEY,
+      });
+    } else {
+      this.openai = null;
+      console.warn('⚠️  OpenAI API key not found - LLM service will use fallback responses');
+    }
     
     this.model = process.env.OPENAI_MODEL || 'gpt-3.5-turbo';
     this.maxTokens = 1000;
@@ -13,7 +19,7 @@ class LLMService {
 
   async generateResponse(conversationHistory, currentMessage) {
     try {
-      if (!process.env.OPENAI_API_KEY) {
+      if (!process.env.OPENAI_API_KEY || !this.openai) {
         throw new Error('OpenAI API key not configured');
       }
 

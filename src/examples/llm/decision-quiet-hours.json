@@ -1,0 +1,13 @@
+{
+    "send": false,
+    "short_notification": "",
+    "long_message": "",
+    "com_b_tags": [],
+    "safety_flags": ["none"],
+    "follow_up_in_hours": 0,
+    "reason_codes": ["quiet_hours"],
+    "suggested_buttons": [],
+    "ask": [],
+    "log_notes": "Blocked by quiet hours"
+  }
+  

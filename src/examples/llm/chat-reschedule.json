@@ -1,0 +1,9 @@
+{
+    "message": "Got it. What time fits better for you in the morning window or would evening work better?",
+    "com_b_tags": ["Opportunity", "Capability"],
+    "safety_flags": ["none"],
+    "suggested_buttons": ["7:30 AM", "8:00 AM", "6:30 PM"],
+    "ask": ["Please pick one time or type a different one."],
+    "log_notes": "Scheduling adjustment"
+  }
+  

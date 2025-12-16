@@ -1,0 +1,13 @@
+{
+    "send": true,
+    "short_notification": "Quick win for your morning routine?",
+    "long_message": "A small step keeps your streak going. Want a 1-tap reminder for this same time tomorrow or a tip to keep meds near what you never forget?",
+    "com_b_tags": ["Motivation", "Capability"],
+    "safety_flags": ["none"],
+    "follow_up_in_hours": 2,
+    "reason_codes": ["recent_miss", "inside_window"],
+    "suggested_buttons": ["Took it", "Remind same time", "Share a tip"],
+    "ask": ["Would placing the meds next to your toothbrush help tomorrow?"],
+    "log_notes": "AM window, missed yesterday, motivation first"
+  }
+  

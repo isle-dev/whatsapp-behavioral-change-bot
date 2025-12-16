@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
-require('dotenv').config();
+require('dotenv').config({ override: true });
 
 const whatsappBot = require('./services/whatsappBot');
 const webhookRoutes = require('./routes/webhook');
