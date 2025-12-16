@@ -1,0 +1,9 @@
+{
+    "message": "I cannot provide dosing instructions. I want you to be safe, so please contact your clinician or pharmacy for exact guidance. I can help you set reminders or plan a routine that fits your day.",
+    "com_b_tags": ["Capability", "Motivation"],
+    "safety_flags": ["medical_advice"],
+    "suggested_buttons": ["Set a reminder", "Plan my routine", "Talk to clinic"],
+    "ask": ["Would you like a daily reminder at a time you choose?"],
+    "log_notes": "Refused dosing advice, offered planning help"
+  }
+  
