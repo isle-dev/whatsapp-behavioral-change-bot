@@ -6,7 +6,7 @@ export async function chat(input: Parameters<typeof buildChatUserMsg>[0]) {
   const userMsg = buildChatUserMsg(input);
   const raw = await respondJSON({
     userMessage: userMsg,
-    jsonSchema: { name: "Chat", schema: ChatSchema.toJSON() }
+    jsonSchema: { name: "Chat", schema: (ChatSchema as unknown as { toJSON(): unknown }).toJSON() }
   });
 
   const parsed = ChatSchema.safeParse(JSON.parse(raw));

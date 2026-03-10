@@ -11,7 +11,7 @@ export async function respondJSON(opts: {
   jsonSchema: SO;
 }) {
   const model = opts.model ?? "gpt-4o-mini";
-  const response = await client.responses.create({
+  const response = await (client.responses.create as Function)({
     model,
     input: [
       { role: "system", content: SYSTEM_PROMPT },
