@@ -1,4 +1,4 @@
-import { chat } from "../src/services/chatter";
+import { chat } from "../services/chatter";
 
 (async () => {
   const out = await chat({
