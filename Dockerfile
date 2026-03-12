@@ -13,7 +13,7 @@ RUN apk add --no-cache \
     harfbuzz \
     ca-certificates \
     ttf-freefont && \
-    npm install -g pnpm
+    npm install -g pnpm@8.7.4
 
 # Set Puppeteer environment variables
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
