@@ -1,4 +1,4 @@
-import { decide } from "../src/services/decider";
+import { decide } from "../services/decider";
 
 (async () => {
   const out = await decide({
