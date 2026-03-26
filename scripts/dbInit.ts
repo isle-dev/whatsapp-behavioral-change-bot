@@ -54,6 +54,30 @@ async function init(): Promise<void> {
     `);
     console.log('✅ onboarding_responses index ready');
 
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS trait_profiles (
+        user_id               TEXT PRIMARY KEY,
+        med_timing            TEXT        DEFAULT NULL,
+        checkin_frequency     TEXT        DEFAULT NULL,
+        med_anchor            TEXT        DEFAULT NULL,
+        storage_location      TEXT        DEFAULT NULL,
+        memory_aids           TEXT        DEFAULT NULL,
+        weekend_routine_diff  TEXT        DEFAULT NULL,
+        schedule_type         TEXT        DEFAULT NULL,
+        yesterday_adherence   BOOLEAN     DEFAULT NULL,
+        social_support        TEXT        DEFAULT NULL,
+        necessity_belief      TEXT        DEFAULT NULL,
+        concerns_belief       TEXT        DEFAULT NULL,
+        illness_understanding TEXT        DEFAULT NULL,
+        weekday_routine       TEXT        DEFAULT NULL,
+        yesterday_barrier     TEXT        DEFAULT NULL,
+        general_barriers      TEXT        DEFAULT NULL,
+        created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    console.log('✅ trait_profiles table ready');
+
     console.log('\n🎉 Database initialisation complete.');
   } finally {
     client.release();

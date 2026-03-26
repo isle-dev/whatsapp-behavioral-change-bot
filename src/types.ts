@@ -1,12 +1,31 @@
 export type ToneValue = 'encouraging' | 'empathetic' | 'neutral';
 export type ReminderWindow = 'morning' | 'noon' | 'evening';
+
+export type MedTiming = 'morning' | 'afternoon' | 'evening' | 'varies';
+export type CheckinFrequency = 'daily' | 'few_times_week' | 'once_week';
+export type SocialSupport = 'yes' | 'no' | 'want_but_dont';
+export type NecessityBelief = 'important' | 'some_doubts' | 'not_sure';
+export type ConcernsBelief = 'not_really' | 'a_little' | 'quite_a_bit';
+export type IllnessUnderstanding = 'knew' | 'heard' | 'didnt_know';
+
 export type OnboardingStepName =
   | 'WELCOME'
   | 'TIMEZONE'
-  | 'WAKE_TIME'
-  | 'SLEEP_TIME'
-  | 'REMINDER_WINDOWS'
-  | 'CUSTOM_TIMES'
+  | 'MED_TIMING'
+  | 'CHECKIN_FREQ'
+  | 'WEEKDAY_ROUTINE'
+  | 'MED_ANCHOR'
+  | 'STORAGE_LOCATION'
+  | 'MEMORY_AIDS'
+  | 'WEEKEND_ROUTINE'
+  | 'SCHEDULE_TYPE'
+  | 'YESTERDAY_ADHERENCE'
+  | 'YESTERDAY_BARRIER'
+  | 'GENERAL_BARRIERS'
+  | 'SOCIAL_SUPPORT'
+  | 'NECESSITY_BELIEF'
+  | 'CONCERNS_BELIEF'
+  | 'ILLNESS_UNDERSTANDING'
   | 'TONE'
   | 'CONFIRM'
   | 'DONE';
@@ -25,16 +44,38 @@ export interface Profile {
   updatedAt?: string;
   onboardingStep?: OnboardingStepName;
   onboardingComplete?: boolean;
+  // Identity & preferences
   name?: string;
   timezone?: string;
-  wakeTime?: string;
-  sleepTime?: string;
+  tone?: ToneValue;
+  // Scheduling (derived or set post-onboarding)
+  reminderTimes?: string[];
   quietStart?: string;
   quietEnd?: string;
-  reminderWindows?: ReminderWindow[];
-  reminderTimes?: string[];
-  customTimes?: string[];
-  tone?: ToneValue;
+  // Legacy fields kept for post-onboarding "change X" commands in orchestration
+  wakeTime?: string;
+  sleepTime?: string;
+  // JITAI trait profile — Block 1: Medication & preferences
+  medTiming?: MedTiming;
+  checkinFrequency?: CheckinFrequency;
+  // JITAI trait profile — Block 2: Weekday routine
+  weekdayRoutine?: string;
+  medAnchor?: string;
+  storageLocation?: string;
+  memoryAids?: string;
+  // JITAI trait profile — Block 3: Weekend & schedule
+  weekendRoutineDiff?: string;
+  scheduleType?: string;
+  // JITAI trait profile — Block 4: Recent adherence
+  yesterdayAdherence?: boolean;
+  yesterdayBarrier?: string;
+  // JITAI trait profile — Block 5: General barriers & social
+  generalBarriers?: string;
+  socialSupport?: SocialSupport;
+  // JITAI trait profile — Block 6: Beliefs & knowledge
+  necessityBelief?: NecessityBelief;
+  concernsBelief?: ConcernsBelief;
+  illnessUnderstanding?: IllnessUnderstanding;
 }
 
 export type ProfilesStore = Record<string, Profile>;
