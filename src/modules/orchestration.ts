@@ -2,7 +2,7 @@
 // Routes to onboarding or post-onboarding command handling.
 import * as onboarding from './onboarding';
 import * as profileStore from './profile';
-import { BotResult, ProfileUpdate, ProfileUpdateField } from '../types';
+import { BotResult, ProfileUpdate, ProfileUpdateField, WaLocation } from '../types';
 
 // ─── Natural language profile update detection ────────────────────────────────
 
@@ -181,18 +181,18 @@ function handleHelp(): BotResult {
 
 // ─── Main router ──────────────────────────────────────────────────────────────
 
-async function processInbound(userId: string, text: string): Promise<BotResult> {
+async function processInbound(userId: string, text: string, location?: WaLocation): Promise<BotResult> {
   const lower = (text || '').trim().toLowerCase();
   const p = profileStore.get(userId);
 
   // New user or mid-onboarding → route to onboarding state machine
   if (!p || !p.onboardingComplete) {
-    return onboarding.processMessage(userId, text);
+    return onboarding.processMessage(userId, text, location);
   }
 
   // "change X" corrections re-enter onboarding at the relevant step
   if (/^change\s+/i.test(lower)) {
-    return onboarding.processMessage(userId, text);
+    return onboarding.processMessage(userId, text, location);
   }
 
   // Tone command

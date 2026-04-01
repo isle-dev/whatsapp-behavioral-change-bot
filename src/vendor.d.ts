@@ -16,6 +16,12 @@ declare module 'whatsapp-web.js' {
     isStatus: boolean;
   }
 
+  export interface WaJsLocation {
+    latitude: number;
+    longitude: number;
+    description?: string;
+  }
+
   export interface Message {
     id: MessageId;
     fromMe: boolean;
@@ -23,6 +29,7 @@ declare module 'whatsapp-web.js' {
     body: string;
     type: string;
     timestamp: number;
+    location?: WaJsLocation;
     getChat(): Promise<Chat>;
     getContact(): Promise<Contact>;
   }

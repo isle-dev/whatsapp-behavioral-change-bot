@@ -32,6 +32,7 @@ import {
   BotResult,
   InteractiveMessage,
   ParseResult,
+  WaLocation,
 } from '../types';
 
 // ─── Defaults ───────────────────────────────────────────────────────────────
@@ -45,6 +46,29 @@ const DEFAULTS = {
   quietEnd: '07:00',
   reminderTimes: ['08:00'],
 };
+
+// ─── Timezone inference from coordinates ─────────────────────────────────────
+// Calls the TimeZoneDB API (https://timezonedb.com/api) with lat/lng.
+// Requires TIMEZONEDB_API_KEY environment variable.
+// Returns an IANA timezone string (e.g. "America/New_York") or null on failure.
+
+async function inferTimezoneFromLocation(lat: number, lng: number): Promise<string | null> {
+  const key = process.env.TIMEZONEDB_API_KEY;
+  if (!key) {
+    console.warn('⚠️  TIMEZONEDB_API_KEY not set — cannot infer timezone from location');
+    return null;
+  }
+  try {
+    const url = `https://api.timezonedb.com/v2.1/get-time-zone?key=${key}&format=json&by=position&lat=${lat}&lng=${lng}`;
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const data = await res.json() as { status: string; zoneName?: string };
+    if (data.status === 'OK' && data.zoneName) return data.zoneName;
+  } catch (err) {
+    console.warn('⚠️  Timezone inference failed:', (err as Error).message);
+  }
+  return null;
+}
 
 // ─── Time parser ─────────────────────────────────────────────────────────────
 // Accepts: "7am", "7:30am", "19:00", "7:30", "7", "10pm", "10:30pm"
@@ -172,7 +196,7 @@ const STEPS: Record<OnboardingStepName, OnboardingStep<unknown>> = {
     prompt(p) {
       const name = p && p.name ? `, ${p.name}` : '';
       return {
-        text: `Great${name}! Which timezone are you in?\n\n1️⃣ Eastern (ET)\n2️⃣ Central (CT)\n3️⃣ Mountain (MT)\n4️⃣ Pacific (PT)\n5️⃣ Other\n\nReply with a number, or type your timezone (e.g., *America/Chicago*).\nType *skip* for Eastern.`,
+        text: `Great${name}! Which timezone are you in?\n\n1️⃣ Eastern (ET)\n2️⃣ Central (CT)\n3️⃣ Mountain (MT)\n4️⃣ Pacific (PT)\n5️⃣ Other\n\nReply with a number, or type your timezone (e.g., *America/Chicago*).\nType *skip* for Eastern.\n\n📍 Or *share your location* (tap the attachment icon) and I'll detect it automatically.`,
         interactive: {
           type: 'button',
           body: { text: `Which timezone are you in${name}?` },
@@ -823,7 +847,7 @@ async function persistTraitProfile(userId: string, p: Profile): Promise<void> {
 
 // ─── Main entry point ────────────────────────────────────────────────────────
 
-async function processMessage(userId: string, input: string): Promise<BotResult> {
+async function processMessage(userId: string, input: string, location?: WaLocation): Promise<BotResult> {
   let p = profileStore.get(userId);
   if (!p) {
     p = { userId, onboardingStep: 'WELCOME', onboardingComplete: false, createdAt: new Date().toISOString() };
@@ -865,6 +889,34 @@ async function processMessage(userId: string, input: string): Promise<BotResult>
       const msg = STEPS[step].prompt(p);
       return { messages: [msg.text], interactive: msg.interactive };
     }
+  }
+
+  // ── Location message: auto-infer timezone when at TIMEZONE step ───────────
+  if (location && (p.onboardingStep === 'TIMEZONE' || !p.onboardingStep)) {
+    const tz = await inferTimezoneFromLocation(location.latitude, location.longitude);
+    if (tz) {
+      STEPS.TIMEZONE.apply!(tz, p);
+      profileStore.upsert(userId, p);
+      await logResponse(userId, 'TIMEZONE', '__location__', tz);
+      const nextStep = p.onboardingStep;
+      if (!nextStep || p.onboardingComplete) {
+        await persistRoutine(userId, p);
+        await persistTraitProfile(userId, p);
+        return { messages: [STEPS.DONE.prompt(p).text] };
+      }
+      const nextDef = STEPS[nextStep];
+      const nextMsg = nextDef.prompt(p);
+      return {
+        messages: [`📍 Got it — timezone set to *${tz}* based on your location.`, nextMsg.text],
+        interactive: nextMsg.interactive,
+      };
+    }
+    // Inference failed — fall through to prompt the user to type it
+    const tzMsg = STEPS.TIMEZONE.prompt(p);
+    return {
+      messages: ["Sorry, I couldn't detect your timezone from that location. Please select or type it:", tzMsg.text],
+      interactive: tzMsg.interactive,
+    };
   }
 
   // ── Step routing ──────────────────────────────────────────────────────────

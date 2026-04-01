@@ -1,6 +1,7 @@
 import { Client, LocalAuth, Message } from 'whatsapp-web.js';
 import qrcode from 'qrcode-terminal';
 import { processInbound } from '../modules/orchestration';
+import { WaLocation } from '../types';
 
 // Demo filter: only process messages that start with "Hi Medi" or "*"
 const DEMO_TRIGGER = /^\s*(hi\s+medi\b|\*)/i;
@@ -128,6 +129,11 @@ class WhatsAppBot {
       const timestamp = new Date().toLocaleTimeString();
       const messageType = message.type || 'text';
       const body = typeof message.body === 'string' ? message.body : '';
+      const loc = message.location;
+      const location: WaLocation | undefined =
+        messageType === 'location' && loc && typeof loc.latitude === 'number'
+          ? { latitude: loc.latitude, longitude: loc.longitude }
+          : undefined;
 
       let contactName = 'Unknown';
       try {
@@ -146,7 +152,7 @@ class WhatsAppBot {
       console.log(`   🤖 From me: ${message.fromMe ? 'Yes' : 'No'}`);
       console.log(`   ⏰ Timestamp: ${message.timestamp}`);
 
-      if (!DEMO_TRIGGER.test(body)) {
+      if (!location && !DEMO_TRIGGER.test(body)) {
         console.log('   ⏭️  Ignored (start with "Hi Medi" or "*" to trigger bot)\n');
         return;
       }
@@ -155,7 +161,7 @@ class WhatsAppBot {
 
       console.log('   🔄 Processing message...');
 
-      const result = await processInbound(message.from, strippedBody);
+      const result = await processInbound(message.from, strippedBody, location);
       const replies = result.messages || [];
 
       let sent: Message | undefined;

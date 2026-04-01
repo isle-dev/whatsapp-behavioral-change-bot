@@ -7,16 +7,22 @@ class LLMService {
   private temperature: number;
 
   constructor() {
-    if (process.env.OPENAI_API_KEY) {
-      this.openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    } else {
-      this.openai = null;
-      console.warn('⚠️  OpenAI API key not found - LLM service will use fallback responses');
-    }
-
+    this.openai = null;
     this.model = process.env.OPENAI_MODEL || 'gpt-3.5-turbo';
     this.maxTokens = 1000;
     this.temperature = 0.7;
+  }
+
+  private getClient(): OpenAI {
+    if (!this.openai) {
+      const key = process.env.OPENAI_API_KEY;
+      if (!key) {
+        console.warn('⚠️  OpenAI API key not found - LLM service will use fallback responses');
+        throw new Error('OpenAI API key not configured');
+      }
+      this.openai = new OpenAI({ apiKey: key });
+    }
+    return this.openai;
   }
 
   async generateResponse(
@@ -24,13 +30,11 @@ class LLMService {
     currentMessage: string
   ): Promise<string> {
     try {
-      if (!process.env.OPENAI_API_KEY || !this.openai) {
-        throw new Error('OpenAI API key not configured');
-      }
+      const client = this.getClient();
 
       const messages = this.prepareMessages(conversationHistory, currentMessage);
 
-      const response = await this.openai.chat.completions.create({
+      const response = await client.chat.completions.create({
         model: this.model,
         messages: messages as OpenAI.Chat.ChatCompletionMessageParam[],
         max_tokens: this.maxTokens,

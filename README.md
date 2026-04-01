@@ -90,6 +90,9 @@ An optional admin API exposes conversation statistics, lets you view/clear conve
 | `WHATSAPP_VERIFY_TOKEN` | Verify token used during webhook setup. |
 | `ADMIN_API_KEY` | API key to secure admin endpoints. |
 | `DATABASE_URL` | Postgres connection string (or set `DB_HOST`/`DB_PORT`/`DB_USER`/`DB_PASSWORD`/`DB_NAME`). |
+| `USE_WHATSAPP` | Set to `true` to enable whatsapp-web.js QR-code mode (dev/demo only). |
+| `TIMEZONEDB_API_KEY` | TimeZoneDB API key for inferring timezone from a shared location. Free tier at timezonedb.com/register. Optional — falls back to manual selection if unset. |
+| `DEFAULT_TONE` | Initial reminder tone for new users: `encouraging`, `empathetic`, or `neutral`. |
 
 ### Running Locally
 
@@ -126,18 +129,23 @@ docker compose up --build
 
 ## Onboarding Flow
 
-New patients are guided through a short setup interview on first contact (under 2 minutes).
+New patients are guided through a 19-step JITAI trait profile interview on first contact. The questions are grouped into six blocks:
 
-| # | Step | Question | Default if skipped |
-|---|------|----------|--------------------|
-| 1 | Welcome | What should I call you? | (anonymous) |
-| 2 | Timezone | Which timezone are you in? | America/New_York |
-| 3 | Wake time | What time do you usually wake up? | 08:00 |
-| 4 | Sleep time | What time do you go to bed? | 22:00 |
-| 5 | Reminder windows | Morning / Noon / Evening / Custom | morning + evening |
-| 6 | Custom times | *(only if custom chosen)* Comma-separated times | 09:00, 13:00, 20:00 |
-| 7 | Tone | Encouraging / Empathetic / Neutral | encouraging |
-| 8 | Confirm | Review and confirm | — |
+| Block | Steps | Purpose |
+|-------|-------|---------|
+| Identity | Name, timezone | Personalise and schedule correctly |
+| Medication & preferences | Medication timing, check-in frequency | Derive reminder times and cadence |
+| Weekday routine | Morning routine, medication anchor, storage location, memory aids | Understand existing habits to build on |
+| Weekend & schedule | Weekend routine difference, schedule consistency | Detect variability in routine |
+| Recent adherence | Yesterday's dose, barrier if missed | Contextual baseline |
+| Beliefs & support | General barriers, social support, necessity belief, concerns belief, illness understanding | Tailor message framing |
+| Setup | Tone, confirm | Communication style |
+
+Reminder times are derived automatically from the reported medication timing — no separate time question.
+
+### Timezone detection
+
+At the timezone step the user can either select from a list or **share their location** (WhatsApp attachment → Location). If `TIMEZONEDB_API_KEY` is set the bot resolves the coordinates to an IANA timezone string and advances automatically. If the key is unset or the lookup fails it falls back to the manual selection prompt.
 
 ### User controls
 
@@ -148,8 +156,10 @@ New patients are guided through a short setup interview on first contact (under 
 
 ### Data storage
 
-- `data/profiles.json` — timezone, wake/sleep times, reminder windows, tone, and current `onboardingStep`.
-- Postgres `routines` table — reminder times, `quiet_start`, `quiet_end`, and `active` flag once onboarding completes.
+- `data/profiles.json` — all profile fields and current `onboardingStep`.
+- Postgres `routines` table — reminder times, `quiet_start`, `quiet_end`, and `active` flag.
+- Postgres `trait_profiles` table — all 14 structured JITAI fields plus open-ended text responses.
+- Postgres `onboarding_responses` table — full audit log of every onboarding answer.
 
 ## API Reference
 

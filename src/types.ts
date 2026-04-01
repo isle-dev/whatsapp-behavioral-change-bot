@@ -94,6 +94,11 @@ export interface InteractiveMessage {
   };
 }
 
+export interface WaLocation {
+  latitude: number;
+  longitude: number;
+}
+
 export interface BotResult {
   messages: string[];
   interactive?: InteractiveMessage;

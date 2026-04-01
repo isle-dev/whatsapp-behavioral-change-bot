@@ -1,7 +1,7 @@
 import express, { Request, Response } from 'express';
 import axios from 'axios';
 import { processInbound } from '../modules/orchestration';
-import { InteractiveMessage } from '../types';
+import { InteractiveMessage, WaLocation } from '../types';
 
 const router = express.Router();
 
@@ -22,9 +22,10 @@ interface WaInteractive {
 }
 interface WaMessage {
   from: string;
-  type: 'text' | 'interactive' | string;
+  type: 'text' | 'interactive' | 'location' | string;
   text?: WaTextContent;
   interactive?: WaInteractive;
+  location?: WaLocation;
 }
 interface WaWebhookBody {
   object?: string;
@@ -92,12 +93,13 @@ async function handleIncomingMessage(message: WaMessage): Promise<void> {
   try {
     const from = message.from;
     const input = extractInput(message);
+    const location = message.type === 'location' ? message.location : undefined;
 
     console.log(`📨 Received ${message.type} message from ${from}: "${input}"`);
 
-    if (!input.trim()) return;
+    if (!input.trim() && !location) return;
 
-    const result = await processInbound(from, input);
+    const result = await processInbound(from, input, location);
 
     for (const text of result.messages || []) {
       const isLast = text === (result.messages || []).at(-1);
