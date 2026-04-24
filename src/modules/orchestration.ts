@@ -2,6 +2,7 @@
 // Routes to onboarding or post-onboarding command handling.
 import * as onboarding from './onboarding';
 import * as profileStore from './profile';
+import * as monitor from './monitor';
 import { BotResult, ProfileUpdate, ProfileUpdateField, WaLocation } from '../types';
 
 // ─── Natural language profile update detection ────────────────────────────────
@@ -201,10 +202,13 @@ async function processInbound(userId: string, text: string, location?: WaLocatio
 
   // Adherence logging (Y / N)
   if (lower === 'y' || lower === 'yes') {
-    return { messages: ['✅ Dose logged as taken. Keep it up!'] };
+    monitor.logDose(userId, true, { source: 'self_report' });
+    const trend = monitor.getTrendMessage(userId, p?.tone ?? 'encouraging');
+    return { messages: [`✅ Dose logged as taken. Keep it up!\n\n${trend}`] };
   }
   if (lower === 'n' || lower === 'no') {
-    return { messages: ["Got it. I've noted this dose as missed. You'll get a reminder next time. 💙"] };
+    monitor.logDose(userId, false, { source: 'self_report' });
+    return { messages: ["Got it. I've noted this dose as missed. You'll get a reminder next time. 💙\n\nWhat got in the way? (Optional — helps me personalise your reminders)"] };
   }
 
   if (lower === 'help') return handleHelp();
