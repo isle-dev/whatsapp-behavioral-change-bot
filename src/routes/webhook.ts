@@ -115,7 +115,7 @@ async function handleIncomingMessage(message: WaMessage): Promise<void> {
   }
 }
 
-async function sendTextMessage(to: string, text: string): Promise<unknown> {
+export async function sendTextMessage(to: string, text: string): Promise<unknown> {
   return sendWhatsAppPayload(to, { type: 'text', text: { body: text } });
 }
 

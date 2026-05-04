@@ -6,8 +6,9 @@ import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import whatsappBot from './services/whatsappBot';
-import webhookRoutes from './routes/webhook';
+import webhookRoutes, { sendTextMessage } from './routes/webhook';
 import adminRoutes from './routes/admin';
+import { startPolling } from './modules/scheduler';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -57,6 +58,9 @@ app.listen(PORT, () => {
 
   if (process.env.USE_WHATSAPP === 'true') {
     whatsappBot.initialize();
+    startPolling((to, msg) => whatsappBot.sendMessage(to, msg).then(() => undefined));
+  } else {
+    startPolling((to, msg) => sendTextMessage(to, msg).then(() => undefined));
   }
 });
 

@@ -293,6 +293,8 @@ export function startPolling(sendFn: SendFn, intervalMs = 5 * 60 * 1000): NodeJS
 
           if (!decision.send) {
             console.log(`[scheduler] Skipped send for ${userId} (${decision.reason_codes.join(', ')})`);
+            // Mark the slot so this window isn't re-evaluated on the next poll tick.
+            await markSent(userId, scheduledTime, profile?.timezone);
             continue;
           }
           message = decision.long_message;
