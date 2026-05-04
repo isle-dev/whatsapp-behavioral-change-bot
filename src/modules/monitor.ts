@@ -57,6 +57,12 @@ function writeAll(store: AdherenceStore): void {
 /**
  * Log a dose event for a user.
  */
+export function clearUser(userId: string): void {
+  const store = readAll();
+  delete store[userId];
+  writeAll(store);
+}
+
 export function logDose(
   userId: string,
   taken: boolean,

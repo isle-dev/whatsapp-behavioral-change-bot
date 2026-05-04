@@ -43,4 +43,10 @@ function isOnboardingComplete(userId: string): boolean {
   return !!(p && p.onboardingComplete);
 }
 
-export { get, upsert, isOnboardingComplete };
+function remove(userId: string): void {
+  const all = readAll();
+  delete all[userId];
+  writeAll(all);
+}
+
+export { get, upsert, isOnboardingComplete, remove };

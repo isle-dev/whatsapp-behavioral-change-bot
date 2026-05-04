@@ -3,6 +3,7 @@
 import * as onboarding from './onboarding';
 import * as profileStore from './profile';
 import * as monitor from './monitor';
+import * as db from './db';
 import { BotResult, ProfileUpdate, ProfileUpdateField, WaLocation } from '../types';
 
 // ─── Natural language profile update detection ────────────────────────────────
@@ -175,7 +176,7 @@ function handleTone(userId: string, tone: string): BotResult {
 function handleHelp(): BotResult {
   return {
     messages: [
-      `📋 *Medi Commands*\n\n*Y* / *Yes* — log dose taken ✅\n*N* / *No* — log dose missed ❌\n*Tone: encouraging|empathetic|neutral* — change reminder style\n*Change [setting]* — update timezone, wake time, reminders, etc.\n*Help* — show this menu`,
+      `📋 *Medi Commands*\n\n*Y* / *Yes* — log dose taken ✅\n*N* / *No* — log dose missed ❌\n*Tone: encouraging|empathetic|neutral* — change reminder style\n*Change [setting]* — update timezone, wake time, reminders, etc.\n*Reset* — delete all your data and start over\n*Help* — show this menu`,
     ],
   };
 }
@@ -185,6 +186,14 @@ function handleHelp(): BotResult {
 async function processInbound(userId: string, text: string, location?: WaLocation): Promise<BotResult> {
   const lower = (text || '').trim().toLowerCase();
   const p = profileStore.get(userId);
+
+  // Global reset — works at any stage
+  if (lower === 'reset') {
+    profileStore.remove(userId);
+    monitor.clearUser(userId);
+    await db.query('DELETE FROM routines WHERE user_id = $1', [userId]);
+    return { messages: ['🗑️ All your data has been deleted. Send any message to start fresh.'] };
+  }
 
   // New user or mid-onboarding → route to onboarding state machine
   if (!p || !p.onboardingComplete) {
