@@ -177,9 +177,107 @@ function handleTone(userId: string, tone: string): BotResult {
 function handleHelp(): BotResult {
   return {
     messages: [
-      `📋 *Medi Commands*\n\n*Y* / *Yes* — log dose taken ✅\n*N* / *No* — log dose missed ❌\n*Tone: encouraging|empathetic|neutral* — change reminder style\n*Change [setting]* — update timezone, wake time, reminders, etc.\n*Reset* — delete all your data and start over\n*Help* — show this menu`,
+      `📋 *Medi Commands*\n\n` +
+      `*Y* / *Yes* — log dose taken ✅\n` +
+      `*N* / *No* — log dose missed ❌\n` +
+      `*Stats* — see your adherence progress 📊\n` +
+      `*Settings* — view your current setup ⚙️\n` +
+      `*Pause [N days]* — pause reminders (default: today)\n` +
+      `*Resume* — turn reminders back on\n` +
+      `*Tone: encouraging|empathetic|neutral* — change reminder style\n` +
+      `*Change [setting]* — update timezone, wake time, reminders, etc.\n` +
+      `*Reset* — delete all your data and start over\n` +
+      `*Help* — show this menu`,
     ],
   };
+}
+
+function handleStats(userId: string, tone: string = 'encouraging'): BotResult {
+  const s = monitor.getSummary(userId, 7);
+  if (s.totalDoses === 0) {
+    return { messages: [`No doses logged yet. Reply *Y* after you take your medication and I'll start tracking your progress! 💊`] };
+  }
+  const rate = Math.round(s.adherenceRate * 100);
+  const rateEmoji = rate >= 90 ? '🌟' : rate >= 70 ? '👍' : '💪';
+  const lines = [
+    `📊 *Your progress (last 7 days)*`,
+    ``,
+    `${rateEmoji} Adherence: ${rate}%`,
+    `🔥 Current streak: ${s.currentStreak} day${s.currentStreak !== 1 ? 's' : ''}`,
+    `🏆 Longest streak: ${s.longestStreak} day${s.longestStreak !== 1 ? 's' : ''}`,
+    `✅ Taken: ${s.takenDoses}  ❌ Missed: ${s.missedDoses}`,
+  ];
+  if (s.recentBarriers.length > 0) {
+    lines.push(``, `Recent challenges: ${s.recentBarriers.slice(-2).join('; ')}`);
+  }
+  if (tone === 'empathetic' && rate < 70) {
+    lines.push(``, `Some weeks are harder. I'm here to help. 💙`);
+  }
+  return { messages: [lines.join('\n')] };
+}
+
+function handleSettings(userId: string): BotResult {
+  const p = profileStore.get(userId);
+  if (!p) return { messages: [`No profile found. Something went wrong.`] };
+
+  const times     = (p.reminderTimes ?? []).join(', ') || 'not set';
+  const tz        = p.timezone ?? 'not set';
+  const tzDisplay = tz.replace(/_/g, ' ');
+  const tone      = p.tone ?? 'encouraging';
+  const qStart    = p.quietStart ?? '22:00';
+  const qEnd      = p.quietEnd   ?? '07:00';
+  const paused    = p.pausedUntil && new Date() < new Date(p.pausedUntil)
+    ? `\n⏸️ Reminders paused until ${new Date(p.pausedUntil).toLocaleString()}`
+    : '';
+
+  return {
+    messages: [
+      `⚙️ *Your settings*\n\n` +
+      `⏰ Reminders: ${times}\n` +
+      `🌍 Timezone: ${tzDisplay}\n` +
+      `💬 Tone: ${tone}\n` +
+      `🌙 Quiet hours: ${qStart} – ${qEnd}` +
+      paused +
+      `\n\nSay *Change [setting]* to update anything.`,
+    ],
+  };
+}
+
+function handlePause(userId: string, lower: string): BotResult {
+  const now = new Date();
+  let until: Date;
+  let label: string;
+
+  const daysMatch = lower.match(/(\d+)\s*days?/);
+  if (/week/.test(lower)) {
+    until = new Date(now); until.setDate(until.getDate() + 7);
+    label = '7 days';
+  } else if (daysMatch) {
+    const n = Math.min(parseInt(daysMatch[1]), 30);
+    until = new Date(now); until.setDate(until.getDate() + n);
+    label = `${n} day${n !== 1 ? 's' : ''}`;
+  } else {
+    // Default: rest of today
+    until = new Date(now); until.setHours(23, 59, 59, 999);
+    label = 'the rest of today';
+  }
+
+  profileStore.upsert(userId, { pausedUntil: until.toISOString() });
+  return { messages: [`⏸️ Reminders paused for ${label}. Say *Resume* whenever you're ready.`] };
+}
+
+function handleResume(userId: string): BotResult {
+  profileStore.upsert(userId, { pausedUntil: undefined });
+  return { messages: [`▶️ Reminders are back on. I'll remind you at your scheduled times.`] };
+}
+
+const STREAK_MILESTONES = new Set([7, 14, 30, 60, 90, 180, 365]);
+
+function milestoneMessage(streak: number, tone: string): string | null {
+  if (!STREAK_MILESTONES.has(streak)) return null;
+  if (tone === 'empathetic') return `💙 *${streak} days in a row* — that takes real effort. You should feel proud.`;
+  if (tone === 'encouraging') return `🎉 *${streak}-day streak!* You're building a real habit. Keep it going!`;
+  return `${streak}-day streak reached.`;
 }
 
 function buildLocalTime(timezone?: string): string {
@@ -206,7 +304,16 @@ async function processInbound(userId: string, text: string, location?: WaLocatio
 
   // New user or mid-onboarding → route to onboarding state machine
   if (!p || !p.onboardingComplete) {
-    return onboarding.processMessage(userId, text, location);
+    const result = await onboarding.processMessage(userId, text, location);
+    // Prepend a resumption greeting when a user returns mid-flow after a gap (>1 hour).
+    // updatedAt is refreshed on every profile write, so this fires at most once per session.
+    if (p && p.onboardingStep && p.onboardingStep !== 'WELCOME' && p.updatedAt) {
+      const gapHours = (Date.now() - new Date(p.updatedAt).getTime()) / 3_600_000;
+      if (gapHours >= 1) {
+        result.messages = [`Welcome back! 👋 Let's pick up where we left off — you're almost done with setup.`, ...result.messages];
+      }
+    }
+    return result;
   }
 
   // Pending barrier capture — must run before other command checks.
@@ -240,8 +347,13 @@ async function processInbound(userId: string, text: string, location?: WaLocatio
       lastResponseAt: new Date().toISOString(),
       pendingBarrierCapture: false,
     });
-    const trend = monitor.getTrendMessage(userId, p?.tone ?? 'encouraging');
-    return { messages: [`✅ Dose logged as taken. Keep it up!\n\n${trend}`] };
+    const tone    = p?.tone ?? 'encouraging';
+    const trend   = monitor.getTrendMessage(userId, tone);
+    const streak  = monitor.getSummary(userId, 400).currentStreak;
+    const milestone = milestoneMessage(streak, tone);
+    const messages = [`✅ Dose logged as taken. Keep it up!\n\n${trend}`];
+    if (milestone) messages.push(milestone);
+    return { messages };
   }
   if (lower === 'n' || lower === 'no') {
     monitor.logDose(userId, false, { source: 'self_report' });
@@ -254,6 +366,22 @@ async function processInbound(userId: string, text: string, location?: WaLocatio
   }
 
   if (lower === 'help') return handleHelp();
+
+  if (lower === 'stats' || /^(how am i doing|my progress|my stats|show stats)$/i.test(lower)) {
+    return handleStats(userId, p.tone);
+  }
+
+  if (lower === 'settings' || lower === 'status') {
+    return handleSettings(userId);
+  }
+
+  if (/^(pause|snooze)(\s|$)/i.test(lower) || lower === 'pause' || lower === 'snooze') {
+    return handlePause(userId, lower);
+  }
+
+  if (lower === 'resume') {
+    return handleResume(userId);
+  }
 
   // Natural language profile updates
   const profileUpdate = detectProfileUpdate(text);

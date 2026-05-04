@@ -81,6 +81,9 @@ export interface Profile {
   consecutiveNonResponses?: number;
   lastReminderSentAt?: string;
   lastResponseAt?: string;
+  // Pause / snooze
+  pausedUntil?: string;        // ISO timestamp; reminders suppressed until this time
+  followUpSentAt?: string;     // YYYY-MM-DD; prevents duplicate follow-up nudges per day
 }
 
 export type ProfilesStore = Record<string, Profile>;

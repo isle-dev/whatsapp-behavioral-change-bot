@@ -43,10 +43,14 @@ function isOnboardingComplete(userId: string): boolean {
   return !!(p && p.onboardingComplete);
 }
 
+function getAll(): ProfilesStore {
+  return readAll();
+}
+
 function remove(userId: string): void {
   const all = readAll();
   delete all[userId];
   writeAll(all);
 }
 
-export { get, upsert, isOnboardingComplete, remove };
+export { get, upsert, isOnboardingComplete, remove, getAll };

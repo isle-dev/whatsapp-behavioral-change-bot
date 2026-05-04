@@ -226,9 +226,57 @@ async function markSent(userId: string, scheduledTime: string, timezone?: string
   }
 }
 
-// ─── Polling loop ─────────────────────────────────────────────────────────────
+// ─── Follow-up nudge ──────────────────────────────────────────────────────────
 
 type SendFn = (userId: string, message: string) => Promise<void>;
+
+// Sent 2–4 hours after a reminder that received no Y/N reply, once per day.
+async function sendFollowUpNudges(sendFn: SendFn): Promise<void> {
+  const allProfiles = profileStore.getAll();
+  const now = new Date();
+
+  for (const profile of Object.values(allProfiles)) {
+    if (!profile.onboardingComplete || !profile.lastReminderSentAt) continue;
+
+    const lastReply = profile.lastResponseAt ? new Date(profile.lastResponseAt) : null;
+    const lastSent  = new Date(profile.lastReminderSentAt);
+
+    // Skip if the user already replied since the last reminder
+    if (lastReply && lastReply >= lastSent) continue;
+
+    const hoursElapsed = (now.getTime() - lastSent.getTime()) / 3_600_000;
+    if (hoursElapsed < 2 || hoursElapsed > 4) continue;
+
+    // Only one nudge per day
+    const today = todayDate(profile.timezone);
+    if (profile.followUpSentAt === today) continue;
+
+    // Respect quiet hours and pause
+    if (isQuietHour(profile.quietStart, profile.quietEnd, profile.timezone)) continue;
+    if (profile.pausedUntil && now < new Date(profile.pausedUntil)) continue;
+
+    const name = profile.name ?? 'there';
+    const tone = profile.tone ?? 'encouraging';
+    let nudge: string;
+    if (tone === 'empathetic') {
+      nudge = `Hi ${name} — just checking in. Did you get a chance to take your medication? Reply *Y* or *N* 💙`;
+    } else if (tone === 'encouraging') {
+      nudge = `Hey ${name}! Did you manage to take your medication earlier? Reply *Y* if you did, *N* if not 💊`;
+    } else {
+      nudge = `Follow-up: did you take your medication? Reply *Y* taken / *N* missed.`;
+    }
+
+    try {
+      await sendFn(profile.userId, nudge);
+      profileStore.upsert(profile.userId, { followUpSentAt: today });
+      console.log(`[scheduler] Sent follow-up nudge to ${profile.userId}`);
+    } catch (err) {
+      console.error(`[scheduler] Follow-up nudge error for ${profile.userId}:`, (err as Error).message);
+    }
+  }
+}
+
+// ─── Polling loop ─────────────────────────────────────────────────────────────
 
 /**
  * Start the scheduler polling loop.
@@ -243,8 +291,13 @@ export function startPolling(sendFn: SendFn, intervalMs = 5 * 60 * 1000): NodeJS
 
   const tick = async () => {
     try {
+      await sendFollowUpNudges(sendFn);
+
       const due = await getDueRoutines();
       for (const { userId, scheduledTime, profile } of due) {
+        // Skip if the user has paused reminders
+        if (profile?.pausedUntil && new Date() < new Date(profile.pausedUntil)) continue;
+
         if (await hasSentToday(userId, scheduledTime, profile?.timezone)) continue;
 
         // If lastReminderSentAt is still set the user hasn't replied since the previous send.
