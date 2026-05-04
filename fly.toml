@@ -1,0 +1,30 @@
+# Fly.io configuration for Medi WhatsApp bot
+# Before deploying:
+#   1. fly apps create <your-app-name>
+#   2. Update the `app` field below with that name
+#   3. fly volumes create medi_data --region ord --size 1
+#   4. fly volumes create medi_wwebjs_auth --region ord --size 1
+#   5. Set secrets: fly secrets set OPENAI_API_KEY=... DATABASE_URL=... (see .env.example)
+#   6. fly deploy
+
+app = "medi-bot-jhu"
+primary_region = "ord"  # Chicago — change to nearest region if needed
+
+[build]
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = false  # keep running 24/7 for the scheduler
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[vm]]
+  memory = "256mb"
+  cpu_kind = "shared"
+  cpus = 1
+
+# Single persistent volume — wwebjs_auth is symlinked from inside data/ by entrypoint.sh
+[[mounts]]
+  source = "medi_data"
+  destination = "/app/data"

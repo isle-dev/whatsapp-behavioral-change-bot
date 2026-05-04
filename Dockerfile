@@ -12,8 +12,9 @@ RUN apk add --no-cache \
     freetype-dev \
     harfbuzz \
     ca-certificates \
-    ttf-freefont && \
-    npm install -g pnpm@8.7.4
+    ttf-freefont \
+    su-exec && \
+    npm install -g pnpm@10.30.3
 
 # Set Puppeteer environment variables
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
@@ -38,7 +39,9 @@ RUN addgroup -g 1001 -S nodejs && \
     adduser -S chatbot -u 1001 && \
     chown -R chatbot:nodejs /app
 
-USER chatbot
+# Entrypoint fixes volume ownership at runtime then drops to chatbot user
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 # Expose port
 EXPOSE 3000
@@ -47,5 +50,4 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD node -e "require('http').get('http://localhost:3000/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) })"
 
-# Start the application
-CMD ["node", "dist/index.js"]
+CMD ["/entrypoint.sh"]
