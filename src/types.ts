@@ -76,6 +76,11 @@ export interface Profile {
   necessityBelief?: NecessityBelief;
   concernsBelief?: ConcernsBelief;
   illnessUnderstanding?: IllnessUnderstanding;
+  // Engagement tracking
+  pendingBarrierCapture?: boolean;
+  consecutiveNonResponses?: number;
+  lastReminderSentAt?: string;
+  lastResponseAt?: string;
 }
 
 export type ProfilesStore = Record<string, Profile>;

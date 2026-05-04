@@ -4,6 +4,7 @@ import * as onboarding from './onboarding';
 import * as profileStore from './profile';
 import * as monitor from './monitor';
 import * as db from './db';
+import { chat } from '../services/chatter';
 import { BotResult, ProfileUpdate, ProfileUpdateField, WaLocation } from '../types';
 
 // ─── Natural language profile update detection ────────────────────────────────
@@ -181,6 +182,13 @@ function handleHelp(): BotResult {
   };
 }
 
+function buildLocalTime(timezone?: string): string {
+  const now = new Date();
+  return timezone
+    ? now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', timeZone: timezone })
+    : `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+}
+
 // ─── Main router ──────────────────────────────────────────────────────────────
 
 async function processInbound(userId: string, text: string, location?: WaLocation): Promise<BotResult> {
@@ -192,12 +200,27 @@ async function processInbound(userId: string, text: string, location?: WaLocatio
     profileStore.remove(userId);
     monitor.clearUser(userId);
     await db.query('DELETE FROM routines WHERE user_id = $1', [userId]);
+    await db.query('DELETE FROM sent_log WHERE user_id = $1', [userId]);
     return { messages: ['🗑️ All your data has been deleted. Send any message to start fresh.'] };
   }
 
   // New user or mid-onboarding → route to onboarding state machine
   if (!p || !p.onboardingComplete) {
     return onboarding.processMessage(userId, text, location);
+  }
+
+  // Pending barrier capture — must run before other command checks.
+  // Y/N/Help clear the flag without capturing; any other text is the barrier reply.
+  if (p.pendingBarrierCapture) {
+    if (lower === 'y' || lower === 'yes' || lower === 'n' || lower === 'no' || lower === 'help') {
+      profileStore.upsert(userId, { pendingBarrierCapture: false });
+      // Fall through so Y/N are still processed normally below
+    } else {
+      const barrier = text.trim();
+      monitor.amendLastBarrier(userId, barrier);
+      profileStore.upsert(userId, { pendingBarrierCapture: false });
+      return { messages: ["Thanks for sharing that. I've noted it to help personalise your support. 💙"] };
+    }
   }
 
   // "change X" corrections re-enter onboarding at the relevant step
@@ -209,14 +232,24 @@ async function processInbound(userId: string, text: string, location?: WaLocatio
   const toneMatch = lower.match(/^tone:\s*(encouraging|empathetic|neutral)$/);
   if (toneMatch) return handleTone(userId, toneMatch[1]);
 
-  // Adherence logging (Y / N)
+  // Adherence logging (Y / N) — resets the non-response counter
   if (lower === 'y' || lower === 'yes') {
     monitor.logDose(userId, true, { source: 'self_report' });
+    profileStore.upsert(userId, {
+      consecutiveNonResponses: 0,
+      lastResponseAt: new Date().toISOString(),
+      pendingBarrierCapture: false,
+    });
     const trend = monitor.getTrendMessage(userId, p?.tone ?? 'encouraging');
     return { messages: [`✅ Dose logged as taken. Keep it up!\n\n${trend}`] };
   }
   if (lower === 'n' || lower === 'no') {
     monitor.logDose(userId, false, { source: 'self_report' });
+    profileStore.upsert(userId, {
+      consecutiveNonResponses: 0,
+      lastResponseAt: new Date().toISOString(),
+      pendingBarrierCapture: true,
+    });
     return { messages: ["Got it. I've noted this dose as missed. You'll get a reminder next time. 💙\n\nWhat got in the way? (Optional — helps me personalise your reminders)"] };
   }
 
@@ -229,11 +262,30 @@ async function processInbound(userId: string, text: string, location?: WaLocatio
     if (updateResult) return updateResult;
   }
 
-  return {
-    messages: [
-      `I didn't quite catch that. Reply *Y* if you took your dose, *N* if you missed it, or *Help* for all commands.`,
-    ],
-  };
+  // LLM chat fallback for anything not matched above
+  try {
+    const now     = new Date();
+    const summary = monitor.getSummary(userId, 7);
+    const result  = await chat({
+      user_id:   userId,
+      now_iso:   now.toISOString(),
+      local_time: buildLocalTime(p.timezone),
+      user_message: text,
+      last_message: null,
+      recent_adherence: {
+        last_7: { taken: summary.takenDoses, missed: summary.missedDoses },
+        streak: summary.currentStreak,
+      },
+      known_barriers: summary.recentBarriers,
+      preferences: { tone: p.tone, name: p.name },
+    });
+    return { messages: [result.message] };
+  } catch (err) {
+    console.error('[orchestration] chat fallback error:', (err as Error).message);
+    return {
+      messages: [`I didn't quite catch that. Reply *Y* if you took your dose, *N* if you missed it, or *Help* for all commands.`],
+    };
+  }
 }
 
 export { processInbound };

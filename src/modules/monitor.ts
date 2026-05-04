@@ -63,6 +63,20 @@ export function clearUser(userId: string): void {
   writeAll(store);
 }
 
+export function amendLastBarrier(userId: string, barrier: string): void {
+  const store = readAll();
+  const events = store[userId];
+  if (!events) return;
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (!events[i].taken && !events[i].barrier) {
+      events[i].barrier = barrier;
+      events[i].com_b_barrier = classifyBarrier(barrier);
+      break;
+    }
+  }
+  writeAll(store);
+}
+
 export function logDose(
   userId: string,
   taken: boolean,

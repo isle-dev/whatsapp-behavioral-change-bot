@@ -78,6 +78,22 @@ async function init(): Promise<void> {
     `);
     console.log('✅ trait_profiles table ready');
 
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS sent_log (
+        user_id        TEXT        NOT NULL,
+        scheduled_time TEXT        NOT NULL,
+        sent_date      TEXT        NOT NULL,
+        sent_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (user_id, scheduled_time, sent_date)
+      )
+    `);
+    console.log('✅ sent_log table ready');
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS sent_log_user_id_idx ON sent_log (user_id)
+    `);
+    console.log('✅ sent_log index ready');
+
     console.log('\n🎉 Database initialisation complete.');
   } finally {
     client.release();

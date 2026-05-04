@@ -3,6 +3,7 @@
 import * as db from './db';
 import * as profileStore from './profile';
 import * as monitor from './monitor';
+import { decide } from '../services/decider';
 import { Profile } from '../types';
 
 export interface RoutineRow {
@@ -188,10 +189,44 @@ function getDueRoutinesFromProfiles(now?: Date): DueRoutine[] {
   return due;
 }
 
-// ─── Polling loop ─────────────────────────────────────────────────────────────
+// ─── Sent-log helpers (DB-backed, in-memory fallback) ────────────────────────
 
-// Tracks last-sent timestamps to prevent duplicate sends within the same window.
-const lastSentAt: Record<string, number> = {};
+// In-memory fallback used when the DB is unavailable.
+const inMemorySentFallback: Record<string, boolean> = {};
+
+function todayDate(timezone?: string): string {
+  return new Date().toLocaleDateString('en-CA', { timeZone: timezone ?? 'UTC' }); // YYYY-MM-DD
+}
+
+async function hasSentToday(userId: string, scheduledTime: string, timezone?: string): Promise<boolean> {
+  const date = todayDate(timezone);
+  const key = `${userId}:${scheduledTime}:${date}`;
+  try {
+    const result = await db.query(
+      'SELECT 1 FROM sent_log WHERE user_id = $1 AND scheduled_time = $2 AND sent_date = $3',
+      [userId, scheduledTime, date]
+    );
+    return (result?.rows.length ?? 0) > 0;
+  } catch {
+    return !!inMemorySentFallback[key];
+  }
+}
+
+async function markSent(userId: string, scheduledTime: string, timezone?: string): Promise<void> {
+  const date = todayDate(timezone);
+  const key = `${userId}:${scheduledTime}:${date}`;
+  inMemorySentFallback[key] = true;
+  try {
+    await db.query(
+      'INSERT INTO sent_log (user_id, scheduled_time, sent_date) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
+      [userId, scheduledTime, date]
+    );
+  } catch {
+    // DB unavailable — in-memory fallback already set
+  }
+}
+
+// ─── Polling loop ─────────────────────────────────────────────────────────────
 
 type SendFn = (userId: string, message: string) => Promise<void>;
 
@@ -210,17 +245,65 @@ export function startPolling(sendFn: SendFn, intervalMs = 5 * 60 * 1000): NodeJS
     try {
       const due = await getDueRoutines();
       for (const { userId, scheduledTime, profile } of due) {
-        const key = `${userId}:${scheduledTime}`;
-        const now = Date.now();
+        if (await hasSentToday(userId, scheduledTime, profile?.timezone)) continue;
 
-        // Skip if already sent within the last 50 minutes for this window
-        if (lastSentAt[key] && now - lastSentAt[key] < 50 * 60 * 1000) continue;
+        // If lastReminderSentAt is still set the user hasn't replied since the previous send.
+        let nonResponses = profile?.consecutiveNonResponses ?? 0;
+        const lastSent    = profile?.lastReminderSentAt;
+        const lastReply   = profile?.lastResponseAt;
+        const noReply     = lastSent && (!lastReply || lastReply < lastSent);
+        if (noReply) {
+          nonResponses += 1;
+          profileStore.upsert(userId, { consecutiveNonResponses: nonResponses });
+        }
 
-        lastSentAt[key] = now;
+        const now = new Date();
+        const tz  = profile?.timezone;
+        const localTime = tz
+          ? now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', timeZone: tz })
+          : `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 
-        // Build a contextual reminder message
-        const message = buildReminderMessage(profile);
+        const summary        = monitor.getSummary(userId, 7);
+        const reminderTimes  = profile?.reminderTimes ?? [scheduledTime];
+        const [hour]         = scheduledTime.split(':').map(Number);
+        const decisionPoint: 'morning' | 'evening' = hour < 12 ? 'morning' : 'evening';
+
+        let message: string;
+        try {
+          const decision = await decide({
+            user_id:                  userId,
+            now_iso:                  now.toISOString(),
+            local_time:               localTime,
+            is_quiet_hours:           false, // already filtered by getDueRoutines
+            decision_point:           decisionPoint,
+            consecutive_nonresponses: nonResponses,
+            recent_adherence: {
+              last_7: { taken: summary.takenDoses, missed: summary.missedDoses },
+              streak: summary.currentStreak,
+            },
+            last_message:   null,
+            last_user_reply: null,
+            known_barriers: summary.recentBarriers,
+            preferences:    { tone: profile?.tone, name: profile?.name },
+            windows: {
+              morning_window: reminderTimes[0] ?? '08:00',
+              evening_window: reminderTimes[reminderTimes.length - 1] ?? '20:00',
+            },
+          });
+
+          if (!decision.send) {
+            console.log(`[scheduler] Skipped send for ${userId} (${decision.reason_codes.join(', ')})`);
+            continue;
+          }
+          message = decision.long_message;
+        } catch (err) {
+          console.error(`[scheduler] Decision engine error for ${userId}, using fallback:`, (err as Error).message);
+          message = buildReminderMessage(profile);
+        }
+
         await sendFn(userId, message);
+        await markSent(userId, scheduledTime, profile?.timezone);
+        profileStore.upsert(userId, { lastReminderSentAt: now.toISOString() });
         console.log(`[scheduler] Sent reminder to ${userId} for window ${scheduledTime}`);
       }
     } catch (err) {
