@@ -84,6 +84,9 @@ export interface Profile {
   // Pause / snooze
   pausedUntil?: string;        // ISO timestamp; reminders suppressed until this time
   followUpSentAt?: string;     // YYYY-MM-DD; prevents duplicate follow-up nudges per day
+  // Conversation context — one turn of memory for the LLM
+  lastOutboundMessage?: string;
+  lastUserMessage?: string;
 }
 
 export type ProfilesStore = Record<string, Profile>;

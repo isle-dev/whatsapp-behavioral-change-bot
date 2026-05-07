@@ -79,6 +79,24 @@ async function init(): Promise<void> {
     console.log('✅ trait_profiles table ready');
 
     await client.query(`
+      CREATE TABLE IF NOT EXISTS adherence_events (
+        id            SERIAL      PRIMARY KEY,
+        user_id       TEXT        NOT NULL,
+        taken         BOOLEAN     NOT NULL,
+        barrier       TEXT        DEFAULT NULL,
+        com_b_barrier TEXT        DEFAULT NULL,
+        source        TEXT        NOT NULL DEFAULT 'self_report',
+        recorded_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    console.log('✅ adherence_events table ready');
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS adherence_events_user_id_idx ON adherence_events (user_id)
+    `);
+    console.log('✅ adherence_events index ready');
+
+    await client.query(`
       CREATE TABLE IF NOT EXISTS sent_log (
         user_id        TEXT        NOT NULL,
         scheduled_time TEXT        NOT NULL,

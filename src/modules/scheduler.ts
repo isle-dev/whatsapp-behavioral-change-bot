@@ -316,7 +316,7 @@ export function startPolling(sendFn: SendFn, intervalMs = 5 * 60 * 1000): NodeJS
           ? now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', timeZone: tz })
           : `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 
-        const summary        = monitor.getSummary(userId, 7);
+        const summary        = await monitor.getSummary(userId, 7);
         const reminderTimes  = profile?.reminderTimes ?? [scheduledTime];
         const [hour]         = scheduledTime.split(':').map(Number);
         const decisionPoint: 'morning' | 'evening' = hour < 12 ? 'morning' : 'evening';
@@ -334,8 +334,8 @@ export function startPolling(sendFn: SendFn, intervalMs = 5 * 60 * 1000): NodeJS
               last_7: { taken: summary.takenDoses, missed: summary.missedDoses },
               streak: summary.currentStreak,
             },
-            last_message:   null,
-            last_user_reply: null,
+            last_message:    profile?.lastOutboundMessage ?? null,
+            last_user_reply: profile?.lastUserMessage     ?? null,
             known_barriers: summary.recentBarriers,
             preferences:    { tone: profile?.tone, name: profile?.name },
             windows: {
@@ -353,12 +353,12 @@ export function startPolling(sendFn: SendFn, intervalMs = 5 * 60 * 1000): NodeJS
           message = decision.long_message;
         } catch (err) {
           console.error(`[scheduler] Decision engine error for ${userId}, using fallback:`, (err as Error).message);
-          message = buildReminderMessage(profile);
+          message = await buildReminderMessage(profile);
         }
 
         await sendFn(userId, message);
         await markSent(userId, scheduledTime, profile?.timezone);
-        profileStore.upsert(userId, { lastReminderSentAt: now.toISOString() });
+        profileStore.upsert(userId, { lastReminderSentAt: now.toISOString(), lastOutboundMessage: message });
         console.log(`[scheduler] Sent reminder to ${userId} for window ${scheduledTime}`);
       }
     } catch (err) {
@@ -378,10 +378,10 @@ export function startPolling(sendFn: SendFn, intervalMs = 5 * 60 * 1000): NodeJS
  * The full LLM-powered version is in services/decider.ts; this is a fast
  * rule-based fallback used when the LLM is unavailable or for demos.
  */
-export function buildReminderMessage(profile: Profile | null): string {
+export async function buildReminderMessage(profile: Profile | null): Promise<string> {
   const name    = profile?.name ?? 'there';
   const tone    = profile?.tone ?? 'encouraging';
-  const trend   = profile ? monitor.getTrendMessage(profile.userId, tone) : '';
+  const trend   = profile ? await monitor.getTrendMessage(profile.userId, tone) : '';
   const anchor  = profile?.medAnchor ?? '';
   const storage = profile?.storageLocation ?? '';
 

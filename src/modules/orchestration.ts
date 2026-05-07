@@ -192,8 +192,8 @@ function handleHelp(): BotResult {
   };
 }
 
-function handleStats(userId: string, tone: string = 'encouraging'): BotResult {
-  const s = monitor.getSummary(userId, 7);
+async function handleStats(userId: string, tone: string = 'encouraging'): Promise<BotResult> {
+  const s = await monitor.getSummary(userId, 7);
   if (s.totalDoses === 0) {
     return { messages: [`No doses logged yet. Reply *Y* after you take your medication and I'll start tracking your progress! 💊`] };
   }
@@ -267,7 +267,7 @@ function handlePause(userId: string, lower: string): BotResult {
 }
 
 function handleResume(userId: string): BotResult {
-  profileStore.upsert(userId, { pausedUntil: undefined });
+  profileStore.upsert(userId, { pausedUntil: undefined, consecutiveNonResponses: 0 });
   return { messages: [`▶️ Reminders are back on. I'll remind you at your scheduled times.`] };
 }
 
@@ -296,7 +296,7 @@ async function processInbound(userId: string, text: string, location?: WaLocatio
   // Global reset — works at any stage
   if (lower === 'reset') {
     profileStore.remove(userId);
-    monitor.clearUser(userId);
+    await monitor.clearUser(userId);
     await db.query('DELETE FROM routines WHERE user_id = $1', [userId]);
     await db.query('DELETE FROM sent_log WHERE user_id = $1', [userId]);
     return { messages: ['🗑️ All your data has been deleted. Send any message to start fresh.'] };
@@ -324,7 +324,7 @@ async function processInbound(userId: string, text: string, location?: WaLocatio
       // Fall through so Y/N are still processed normally below
     } else {
       const barrier = text.trim();
-      monitor.amendLastBarrier(userId, barrier);
+      await monitor.amendLastBarrier(userId, barrier);
       profileStore.upsert(userId, { pendingBarrierCapture: false });
       return { messages: ["Thanks for sharing that. I've noted it to help personalise your support. 💙"] };
     }
@@ -341,22 +341,22 @@ async function processInbound(userId: string, text: string, location?: WaLocatio
 
   // Adherence logging (Y / N) — resets the non-response counter
   if (lower === 'y' || lower === 'yes') {
-    monitor.logDose(userId, true, { source: 'self_report' });
+    await monitor.logDose(userId, true, { source: 'self_report' });
     profileStore.upsert(userId, {
       consecutiveNonResponses: 0,
       lastResponseAt: new Date().toISOString(),
       pendingBarrierCapture: false,
     });
     const tone    = p?.tone ?? 'encouraging';
-    const trend   = monitor.getTrendMessage(userId, tone);
-    const streak  = monitor.getSummary(userId, 400).currentStreak;
+    const trend   = await monitor.getTrendMessage(userId, tone);
+    const streak  = (await monitor.getSummary(userId, 400)).currentStreak;
     const milestone = milestoneMessage(streak, tone);
     const messages = [`✅ Dose logged as taken. Keep it up!\n\n${trend}`];
     if (milestone) messages.push(milestone);
     return { messages };
   }
   if (lower === 'n' || lower === 'no') {
-    monitor.logDose(userId, false, { source: 'self_report' });
+    await monitor.logDose(userId, false, { source: 'self_report' });
     profileStore.upsert(userId, {
       consecutiveNonResponses: 0,
       lastResponseAt: new Date().toISOString(),
@@ -368,7 +368,7 @@ async function processInbound(userId: string, text: string, location?: WaLocatio
   if (lower === 'help') return handleHelp();
 
   if (lower === 'stats' || /^(how am i doing|my progress|my stats|show stats)$/i.test(lower)) {
-    return handleStats(userId, p.tone);
+    return await handleStats(userId, p.tone);
   }
 
   if (lower === 'settings' || lower === 'status') {
@@ -393,19 +393,23 @@ async function processInbound(userId: string, text: string, location?: WaLocatio
   // LLM chat fallback for anything not matched above
   try {
     const now     = new Date();
-    const summary = monitor.getSummary(userId, 7);
+    const summary = await monitor.getSummary(userId, 7);
     const result  = await chat({
-      user_id:   userId,
-      now_iso:   now.toISOString(),
-      local_time: buildLocalTime(p.timezone),
+      user_id:      userId,
+      now_iso:      now.toISOString(),
+      local_time:   buildLocalTime(p.timezone),
       user_message: text,
-      last_message: null,
+      last_message: p.lastOutboundMessage ?? null,
       recent_adherence: {
         last_7: { taken: summary.takenDoses, missed: summary.missedDoses },
         streak: summary.currentStreak,
       },
       known_barriers: summary.recentBarriers,
       preferences: { tone: p.tone, name: p.name },
+    });
+    profileStore.upsert(userId, {
+      lastOutboundMessage: result.message,
+      lastUserMessage:     text,
     });
     return { messages: [result.message] };
   } catch (err) {

@@ -1,5 +1,40 @@
 import { z } from "zod";
 
+// ─── JSON Schema objects for OpenAI structured outputs ───────────────────────
+// Zod schemas are used for runtime validation; these are passed to the API.
+
+export const DecisionInputSchema = {
+  type: "object",
+  properties: {
+    send:                { type: "boolean" },
+    short_notification:  { type: "string" },
+    long_message:        { type: "string" },
+    com_b_tags:          { type: "array", items: { type: "string", enum: ["Motivation", "Capability", "Opportunity"] } },
+    safety_flags:        { type: "array", items: { type: "string", enum: ["none", "medical_advice", "crisis", "self_harm", "suspicious_request"] } },
+    follow_up_in_hours:  { type: "number" },
+    reason_codes:        { type: "array", items: { type: "string" } },
+    suggested_buttons:   { type: "array", items: { type: "string" } },
+    ask:                 { type: "array", items: { type: "string" } },
+    log_notes:           { type: "string" },
+  },
+  required: ["send", "short_notification", "long_message", "com_b_tags", "safety_flags", "follow_up_in_hours", "reason_codes", "suggested_buttons", "ask", "log_notes"],
+  additionalProperties: false,
+} as const;
+
+export const ChatInputSchema = {
+  type: "object",
+  properties: {
+    message:           { type: "string" },
+    com_b_tags:        { type: "array", items: { type: "string", enum: ["Motivation", "Capability", "Opportunity"] } },
+    safety_flags:      { type: "array", items: { type: "string", enum: ["none", "medical_advice", "crisis", "self_harm", "suspicious_request"] } },
+    suggested_buttons: { type: "array", items: { type: "string" } },
+    ask:               { type: "array", items: { type: "string" } },
+    log_notes:         { type: "string" },
+  },
+  required: ["message", "com_b_tags", "safety_flags", "suggested_buttons", "ask", "log_notes"],
+  additionalProperties: false,
+} as const;
+
 export const DecisionSchema = z.object({
   send: z.boolean(),
   short_notification: z.string(),

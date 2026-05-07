@@ -1,12 +1,12 @@
 import { buildDecisionUserMsg } from "../llm/decisionPrompt";
-import { DecisionSchema } from "../llm/schemas";
+import { DecisionSchema, DecisionInputSchema } from "../llm/schemas";
 import { respondJSON } from "../llm/client";
 
 export async function decide(input: Parameters<typeof buildDecisionUserMsg>[0]) {
   const userMsg = buildDecisionUserMsg(input);
   const raw = await respondJSON({
     userMessage: userMsg,
-    jsonSchema: { name: "Decision", schema: (DecisionSchema as unknown as { toJSON(): unknown }).toJSON() }
+    jsonSchema: { name: "Decision", schema: DecisionInputSchema },
   });
 
   const parsed = DecisionSchema.safeParse(JSON.parse(raw));

@@ -246,9 +246,9 @@ async function runScript(name: string, messages: Message[]) {
 
     // Log Y/N to monitor
     if (lower === 'y' || lower === 'yes') {
-      monitor.logDose(personaId, true, { source: 'self_report' });
+      await monitor.logDose(personaId, true, { source: 'self_report' });
     } else if (lower === 'n' || lower === 'no') {
-      monitor.logDose(personaId, false, { source: 'self_report' });
+      await monitor.logDose(personaId, false, { source: 'self_report' });
     }
 
     try {
@@ -273,7 +273,7 @@ async function printAdherenceSummaries() {
   printSection('ADHERENCE SUMMARIES (last 14 days)');
 
   for (let i = 0; i < personas.length; i++) {
-    const s = monitor.getSummary(personas[i], 14);
+    const s = await monitor.getSummary(personas[i], 14);
     const bar = '█'.repeat(Math.round(s.adherenceRate * 10)) + '░'.repeat(10 - Math.round(s.adherenceRate * 10));
     console.log(
       `  ${BOLD}${names[i].padEnd(8)}${RESET}  ` +
