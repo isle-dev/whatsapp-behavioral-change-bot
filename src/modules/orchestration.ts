@@ -280,6 +280,31 @@ function milestoneMessage(streak: number, tone: string): string | null {
   return `${streak}-day streak reached.`;
 }
 
+const CRISIS_MESSAGE =
+  `I hear you, and I'm concerned about your safety. Please reach out right now:\n\n` +
+  `🆘 *Crisis Text Line*: Text HOME to 741741\n` +
+  `📞 *988 Lifeline*: Call or text 988\n` +
+  `🌍 *International*: findahelpline.com\n\n` +
+  `You don't have to face this alone. 💙`;
+
+function hasCrisisFlag(flags: string[]): boolean {
+  return flags.some((f) => f === 'crisis' || f === 'self_harm');
+}
+
+function buildInteractive(buttons: string[]): import('../types').InteractiveMessage | undefined {
+  const titles = buttons.map((b) => b.trim().substring(0, 20)).filter(Boolean).slice(0, 3);
+  if (titles.length === 0) return undefined;
+  return {
+    type: 'button',
+    action: {
+      buttons: titles.map((title, i) => ({
+        type: 'reply' as const,
+        reply: { id: `btn_${i}`, title },
+      })),
+    },
+  };
+}
+
 function buildLocalTime(timezone?: string): string {
   const now = new Date();
   return timezone
@@ -407,11 +432,20 @@ async function processInbound(userId: string, text: string, location?: WaLocatio
       known_barriers: summary.recentBarriers,
       preferences: { tone: p.tone, name: p.name },
     });
+
+    if (hasCrisisFlag(result.safety_flags)) {
+      return { messages: [CRISIS_MESSAGE] };
+    }
+
     profileStore.upsert(userId, {
       lastOutboundMessage: result.message,
       lastUserMessage:     text,
+      lastLlmComBTags:     result.com_b_tags,
+      lastLlmLogNotes:     result.log_notes,
     });
-    return { messages: [result.message] };
+
+    const interactive = buildInteractive(result.suggested_buttons ?? []);
+    return { messages: [result.message], interactive };
   } catch (err) {
     console.error('[orchestration] chat fallback error:', (err as Error).message);
     return {

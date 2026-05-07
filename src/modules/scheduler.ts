@@ -6,6 +6,10 @@ import * as monitor from './monitor';
 import { decide } from '../services/decider';
 import { Profile } from '../types';
 
+function hasCrisisFlag(flags: string[]): boolean {
+  return flags.some((f) => f === 'crisis' || f === 'self_harm');
+}
+
 export interface RoutineRow {
   id: string;
   user_id: string;
@@ -244,8 +248,11 @@ async function sendFollowUpNudges(sendFn: SendFn): Promise<void> {
     // Skip if the user already replied since the last reminder
     if (lastReply && lastReply >= lastSent) continue;
 
-    const hoursElapsed = (now.getTime() - lastSent.getTime()) / 3_600_000;
-    if (hoursElapsed < 2 || hoursElapsed > 4) continue;
+    const hoursElapsed  = (now.getTime() - lastSent.getTime()) / 3_600_000;
+    const targetHours   = profile.reminderFollowUpHours ?? 3;
+    const windowOpen    = Math.max(1, targetHours - 0.5);
+    const windowClose   = targetHours + 1;
+    if (hoursElapsed < windowOpen || hoursElapsed > windowClose) continue;
 
     // Only one nudge per day
     const today = todayDate(profile.timezone);
@@ -258,7 +265,9 @@ async function sendFollowUpNudges(sendFn: SendFn): Promise<void> {
     const name = profile.name ?? 'there';
     const tone = profile.tone ?? 'encouraging';
     let nudge: string;
-    if (tone === 'empathetic') {
+    if (profile.lastShortNotification) {
+      nudge = profile.lastShortNotification;
+    } else if (tone === 'empathetic') {
       nudge = `Hi ${name} — just checking in. Did you get a chance to take your medication? Reply *Y* or *N* 💙`;
     } else if (tone === 'encouraging') {
       nudge = `Hey ${name}! Did you manage to take your medication earlier? Reply *Y* if you did, *N* if not 💊`;
@@ -322,6 +331,12 @@ export function startPolling(sendFn: SendFn, intervalMs = 5 * 60 * 1000): NodeJS
         const decisionPoint: 'morning' | 'evening' = hour < 12 ? 'morning' : 'evening';
 
         let message: string;
+        let decisionMeta: {
+          short_notification?: string;
+          follow_up_in_hours?: number;
+          com_b_tags?: string[];
+          log_notes?: string;
+        } = {};
         try {
           const decision = await decide({
             user_id:                  userId,
@@ -336,8 +351,8 @@ export function startPolling(sendFn: SendFn, intervalMs = 5 * 60 * 1000): NodeJS
             },
             last_message:    profile?.lastOutboundMessage ?? null,
             last_user_reply: profile?.lastUserMessage     ?? null,
-            known_barriers: summary.recentBarriers,
-            preferences:    { tone: profile?.tone, name: profile?.name },
+            known_barriers:  summary.recentBarriers,
+            preferences:     { tone: profile?.tone, name: profile?.name },
             windows: {
               morning_window: reminderTimes[0] ?? '08:00',
               evening_window: reminderTimes[reminderTimes.length - 1] ?? '20:00',
@@ -346,11 +361,21 @@ export function startPolling(sendFn: SendFn, intervalMs = 5 * 60 * 1000): NodeJS
 
           if (!decision.send) {
             console.log(`[scheduler] Skipped send for ${userId} (${decision.reason_codes.join(', ')})`);
-            // Mark the slot so this window isn't re-evaluated on the next poll tick.
+            await markSent(userId, scheduledTime, profile?.timezone);
+            continue;
+          }
+          if (hasCrisisFlag(decision.safety_flags)) {
+            console.warn(`[scheduler] Safety flag detected for ${userId} — skipping proactive send`);
             await markSent(userId, scheduledTime, profile?.timezone);
             continue;
           }
           message = decision.long_message;
+          decisionMeta = {
+            short_notification: decision.short_notification,
+            follow_up_in_hours: decision.follow_up_in_hours,
+            com_b_tags:         decision.com_b_tags,
+            log_notes:          decision.log_notes,
+          };
         } catch (err) {
           console.error(`[scheduler] Decision engine error for ${userId}, using fallback:`, (err as Error).message);
           message = await buildReminderMessage(profile);
@@ -358,7 +383,14 @@ export function startPolling(sendFn: SendFn, intervalMs = 5 * 60 * 1000): NodeJS
 
         await sendFn(userId, message);
         await markSent(userId, scheduledTime, profile?.timezone);
-        profileStore.upsert(userId, { lastReminderSentAt: now.toISOString(), lastOutboundMessage: message });
+        profileStore.upsert(userId, {
+          lastReminderSentAt:    now.toISOString(),
+          lastOutboundMessage:   message,
+          lastShortNotification: decisionMeta.short_notification,
+          reminderFollowUpHours: decisionMeta.follow_up_in_hours,
+          lastLlmComBTags:       decisionMeta.com_b_tags,
+          lastLlmLogNotes:       decisionMeta.log_notes,
+        });
         console.log(`[scheduler] Sent reminder to ${userId} for window ${scheduledTime}`);
       }
     } catch (err) {

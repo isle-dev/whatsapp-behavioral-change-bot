@@ -87,6 +87,11 @@ export interface Profile {
   // Conversation context — one turn of memory for the LLM
   lastOutboundMessage?: string;
   lastUserMessage?: string;
+  // LLM decision metadata
+  lastLlmComBTags?: string[];
+  lastLlmLogNotes?: string;
+  lastShortNotification?: string;
+  reminderFollowUpHours?: number;
 }
 
 export type ProfilesStore = Record<string, Profile>;
