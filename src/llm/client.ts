@@ -1,7 +1,11 @@
 import OpenAI from "openai";
 import { SYSTEM_PROMPT } from "./systemPrompt";
 
-const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+let _client: OpenAI | null = null;
+function getClient(): OpenAI {
+  if (!_client) _client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  return _client;
+}
 
 type SO = { name: string; schema: unknown };
 
@@ -11,7 +15,7 @@ export async function respondJSON(opts: {
   jsonSchema: SO;
 }) {
   const model = opts.model ?? "gpt-4o-mini";
-  const response = await (client.responses.create as Function)({
+  const response = await (getClient().responses.create as Function)({
     model,
     input: [
       { role: "system", content: SYSTEM_PROMPT },
