@@ -1,23 +1,12 @@
-// Adherence monitoring module — stores and queries Y/N dose events.
-// Primary storage is Postgres (adherence_events table); JSON is the fallback.
-import fs from 'fs';
-import path from 'path';
 import * as db from './db';
-
-const DATA_DIR     = path.join(__dirname, '../../data');
-const ADHERENCE_PATH = path.join(DATA_DIR, 'adherence.json');
 
 export interface AdherenceEvent {
   userId: string;
-  timestamp: string;       // ISO 8601
+  timestamp: string;
   taken: boolean;
   barrier?: string;
   com_b_barrier?: 'Capability' | 'Opportunity' | 'Motivation';
   source: 'self_report' | 'reminder_response' | 'manual';
-}
-
-export interface AdherenceStore {
-  [userId: string]: AdherenceEvent[];
 }
 
 export interface AdherenceSummary {
@@ -32,29 +21,6 @@ export interface AdherenceSummary {
   recentBarriers: string[];
 }
 
-// ─── JSON helpers (fallback) ──────────────────────────────────────────────────
-
-function ensureDataDir(): void {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-}
-
-function readAllJson(): AdherenceStore {
-  ensureDataDir();
-  if (!fs.existsSync(ADHERENCE_PATH)) return {};
-  try {
-    return JSON.parse(fs.readFileSync(ADHERENCE_PATH, 'utf8')) as AdherenceStore;
-  } catch (_) {
-    return {};
-  }
-}
-
-function writeAllJson(store: AdherenceStore): void {
-  ensureDataDir();
-  fs.writeFileSync(ADHERENCE_PATH, JSON.stringify(store, null, 2));
-}
-
-// ─── Row → AdherenceEvent adapter ────────────────────────────────────────────
-
 function rowToEvent(row: Record<string, unknown>): AdherenceEvent {
   return {
     userId:       row.user_id as string,
@@ -68,15 +34,8 @@ function rowToEvent(row: Record<string, unknown>): AdherenceEvent {
   };
 }
 
-// ─── Public API ───────────────────────────────────────────────────────────────
-
 export async function clearUser(userId: string): Promise<void> {
-  try {
-    await db.query('DELETE FROM adherence_events WHERE user_id = $1', [userId]);
-  } catch (_) { /* DB unavailable */ }
-  const store = readAllJson();
-  delete store[userId];
-  writeAllJson(store);
+  await db.query('DELETE FROM adherence_events WHERE user_id = $1', [userId]);
 }
 
 export async function logDose(
@@ -94,83 +53,43 @@ export async function logDose(
     taken,
     source: opts.source ?? 'self_report',
   };
-  if (opts.barrier)      event.barrier      = opts.barrier;
+  if (opts.barrier)       event.barrier       = opts.barrier;
   if (opts.com_b_barrier) event.com_b_barrier = opts.com_b_barrier;
 
-  // Write to Postgres (best-effort)
-  try {
-    await db.query(
-      `INSERT INTO adherence_events (user_id, taken, barrier, com_b_barrier, source, recorded_at)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [userId, taken, opts.barrier ?? null, opts.com_b_barrier ?? null, event.source, event.timestamp]
-    );
-  } catch (_) { /* DB unavailable — JSON fallback below */ }
-
-  // Always write to JSON as backup
-  const store = readAllJson();
-  if (!store[userId]) store[userId] = [];
-  store[userId].push(event);
-  writeAllJson(store);
+  await db.query(
+    `INSERT INTO adherence_events (user_id, taken, barrier, com_b_barrier, source, recorded_at)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [userId, taken, opts.barrier ?? null, opts.com_b_barrier ?? null, event.source, event.timestamp]
+  );
   return event;
 }
 
 export async function amendLastBarrier(userId: string, barrier: string): Promise<void> {
   const com_b = classifyBarrier(barrier);
-
-  // Update in Postgres (best-effort)
-  try {
-    await db.query(
-      `UPDATE adherence_events
-       SET barrier = $1, com_b_barrier = $2
-       WHERE id = (
-         SELECT id FROM adherence_events
-         WHERE user_id = $3 AND taken = false AND barrier IS NULL
-         ORDER BY recorded_at DESC LIMIT 1
-       )`,
-      [barrier, com_b, userId]
-    );
-  } catch (_) { /* DB unavailable */ }
-
-  // Update JSON
-  const store = readAllJson();
-  const events = store[userId];
-  if (events) {
-    for (let i = events.length - 1; i >= 0; i--) {
-      if (!events[i].taken && !events[i].barrier) {
-        events[i].barrier      = barrier;
-        events[i].com_b_barrier = com_b;
-        break;
-      }
-    }
-    writeAllJson(store);
-  }
+  await db.query(
+    `UPDATE adherence_events
+     SET barrier = $1, com_b_barrier = $2
+     WHERE id = (
+       SELECT id FROM adherence_events
+       WHERE user_id = $3 AND taken = false AND barrier IS NULL
+       ORDER BY recorded_at DESC LIMIT 1
+     )`,
+    [barrier, com_b, userId]
+  );
 }
 
 export async function getHistory(userId: string, days?: number): Promise<AdherenceEvent[]> {
-  // Try Postgres first
-  try {
-    const params: unknown[] = [userId];
-    let sql = 'SELECT * FROM adherence_events WHERE user_id = $1';
-    if (days) {
-      const cutoff = new Date();
-      cutoff.setDate(cutoff.getDate() - days);
-      sql += ' AND recorded_at >= $2';
-      params.push(cutoff.toISOString());
-    }
-    sql += ' ORDER BY recorded_at ASC';
-    const result = await db.query(sql, params);
-    // If Postgres has rows for this user, use them
-    if (result && result.rows.length > 0) {
-      return result.rows.map(rowToEvent);
-    }
-  } catch (_) { /* DB unavailable */ }
-
-  // JSON fallback
-  const events = readAllJson()[userId] ?? [];
-  if (!days) return events;
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - days);
-  return events.filter((e) => new Date(e.timestamp) >= cutoff);
+  const params: unknown[] = [userId];
+  let sql = 'SELECT * FROM adherence_events WHERE user_id = $1';
+  if (days) {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+    sql += ' AND recorded_at >= $2';
+    params.push(cutoff.toISOString());
+  }
+  sql += ' ORDER BY recorded_at ASC';
+  const result = await db.query(sql, params);
+  return result ? result.rows.map(rowToEvent) : [];
 }
 
 export async function getSummary(userId: string, days = 30): Promise<AdherenceSummary> {

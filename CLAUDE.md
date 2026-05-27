@@ -19,8 +19,8 @@ Key files:
 
 - `src/modules/orchestration.js` is the single entry point for inbound user messages
 - `src/modules/onboarding.js` contains the onboarding prompts and profile writes
-- `src/modules/profile.js` stores the patient profile locally under `data/profiles.json`
-- `src/modules/monitor.js` stores adherence events locally under `data/adherence.json`
+- `src/modules/profile.js` reads and writes user profiles to the `profiles` Postgres table
+- `src/modules/monitor.js` reads and writes adherence events to the `adherence` Postgres table
 - `src/modules/decisionEngine.js` generates reminder text and optional voice payload
 - `src/modules/scheduler.js` polls Postgres for due routines and calls the decision engine
 - `src/modules/db.js` manages the Postgres connection pool
@@ -29,7 +29,9 @@ Key files:
 
 ### What goes into Postgres
 
-Only scheduling metadata goes into the database. We do not store medication names or clinical content in the routines table.
+All persistent state lives in Neon Postgres. We do not store medication names or clinical content.
+
+Migration is in `scripts/dbInit.js` and should remain idempotent.
 
 Table: `routines`
 
@@ -41,16 +43,24 @@ Table: `routines`
 - `quiet_end` TEXT optional, HH:MM
 - `active` BOOLEAN
 
-Migration is in `scripts/dbInit.js` and should remain idempotent.
+Table: `profiles`
 
-### What stays in JSON for now
+- `user_id` TEXT primary key
+- `onboarding_step` TEXT
+- `onboarding_complete` BOOLEAN
+- `tone` TEXT
+- `voice_enabled` BOOLEAN
+- `updated_at` TIMESTAMPTZ
 
-Profiles and adherence logs are stored in `data/` as JSON. This is a deliberate tradeoff while the refactor stabilizes.
+Table: `adherence`
 
-- `data/profiles.json` includes user preferences and onboarding state
-- `data/adherence.json` includes timestamped Y or N entries
+- `id` SERIAL primary key
+- `user_id` TEXT
+- `taken` BOOLEAN
+- `barrier` TEXT optional
+- `recorded_at` TIMESTAMPTZ
 
-If you migrate these to Postgres later, keep the schema minimal and avoid raw chat logs.
+Keep schemas minimal — avoid raw chat logs or freeform message content.
 
 ## Commands
 

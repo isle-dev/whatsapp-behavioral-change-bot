@@ -10,13 +10,11 @@ class WhatsAppBot {
   private client: Client | null;
   private isReady: boolean;
   private processedMessages: Set<string>;
-  private sentMessageIds: Set<string>;
 
   constructor() {
     this.client = null;
     this.isReady = false;
     this.processedMessages = new Set();
-    this.sentMessageIds = new Set();
   }
 
   initialize(): void {
@@ -51,38 +49,7 @@ class WhatsAppBot {
 
     this.client.on('message', async (message) => {
       console.log('🔔 message event');
-      if (message.fromMe) {
-        console.log('   ⏭️  Ignoring self message on message event\n');
-        return;
-      }
       await this.handleMessage(message);
-    });
-
-    this.client.on('message_create', async (message) => {
-      console.log('📝 message_create event. fromMe:', !!message.fromMe);
-
-      const serializedId = message.id && (message.id._serialized || message.id.id);
-      if (serializedId && this.sentMessageIds.has(serializedId)) {
-        console.log('   ⏭️  Ignoring bot-sent message (tracked id)\n');
-        return;
-      }
-
-      if (message.fromMe) {
-        try {
-          const chat = await message.getChat();
-          if (chat.isGroup) {
-            console.log('   ⏭️  Ignoring self message in group\n');
-            return;
-          }
-          if (chat.isStatus) {
-            console.log('   ⏭️  Ignoring status chat\n');
-            return;
-          }
-          await this.handleMessage(message);
-        } catch (e) {
-          console.log('   ⚠️  Could not check chat type for message_create:', (e as Error).message);
-        }
-      }
     });
 
     this.client.on('message_revoke_everyone', () => {
@@ -168,15 +135,6 @@ class WhatsAppBot {
       for (const reply of replies) {
         sent = await this.sendMessage(message.from, reply);
       }
-      if (!sent && replies.length === 0) return;
-      if (sent && sent.id && (sent.id._serialized || sent.id.id)) {
-        const sid = sent.id._serialized || sent.id.id;
-        this.sentMessageIds.add(sid);
-        if (this.sentMessageIds.size > 2000) {
-          this.sentMessageIds = new Set(Array.from(this.sentMessageIds).slice(-1000));
-        }
-      }
-
       const responseTime = new Date().toLocaleTimeString();
       console.log(`   ✅ [${responseTime}] Response sent successfully to ${contactName}\n`);
     } catch (error) {
@@ -188,11 +146,7 @@ class WhatsAppBot {
 
       const errorMessage = "I'm sorry, I encountered an error processing your message. Please try again.";
       console.log('   🔄 Sending error message to user...');
-      const sent = await this.sendMessage(message.from, errorMessage);
-      if (sent && sent.id && (sent.id._serialized || sent.id.id)) {
-        const sid = sent.id._serialized || sent.id.id;
-        this.sentMessageIds.add(sid);
-      }
+      await this.sendMessage(message.from, errorMessage);
       console.log('   ✅ Error message sent\n');
     }
   }

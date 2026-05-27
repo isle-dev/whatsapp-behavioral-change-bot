@@ -17,6 +17,16 @@ async function init(): Promise<void> {
     console.log('🔧 Initialising database schema...');
 
     await client.query(`
+      CREATE TABLE IF NOT EXISTS profiles (
+        user_id    TEXT PRIMARY KEY,
+        data       JSONB NOT NULL DEFAULT '{}',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    console.log('✅ profiles table ready');
+
+    await client.query(`
       CREATE TABLE IF NOT EXISTS routines (
         id          TEXT PRIMARY KEY,
         user_id     TEXT NOT NULL,
@@ -111,6 +121,24 @@ async function init(): Promise<void> {
       CREATE INDEX IF NOT EXISTS sent_log_user_id_idx ON sent_log (user_id)
     `);
     console.log('✅ sent_log index ready');
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS one_shot_reminders (
+        id         TEXT        PRIMARY KEY,
+        user_id    TEXT        NOT NULL,
+        message    TEXT        NOT NULL,
+        fire_at    TIMESTAMPTZ NOT NULL,
+        sent       BOOLEAN     NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    console.log('✅ one_shot_reminders table ready');
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS one_shot_reminders_fire_at_idx
+        ON one_shot_reminders (fire_at) WHERE sent = false
+    `);
+    console.log('✅ one_shot_reminders index ready');
 
     console.log('\n🎉 Database initialisation complete.');
   } finally {

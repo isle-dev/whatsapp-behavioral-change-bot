@@ -134,13 +134,12 @@ export async function getDueRoutines(now?: Date): Promise<DueRoutine[]> {
   );
 
   if (!result || result.rows.length === 0) {
-    // Fallback: use JSON profiles when DB unavailable
     return getDueRoutinesFromProfiles(now);
   }
 
   const due: DueRoutine[] = [];
   for (const row of result.rows as RoutineRow[]) {
-    const profile = profileStore.get(row.user_id);
+    const profile = await profileStore.get(row.user_id);
     const tz = profile?.timezone;
 
     // Day-of-week filter
@@ -164,15 +163,8 @@ export async function getDueRoutines(now?: Date): Promise<DueRoutine[]> {
  * Fallback scheduler: reads JSON profiles directly when Postgres is unavailable.
  * Used in demo/offline mode.
  */
-function getDueRoutinesFromProfiles(now?: Date): DueRoutine[] {
-  // profileStore doesn't expose a getAll(), so we read the file directly
-  const fs = require('fs') as typeof import('fs');
-  const path = require('path') as typeof import('path');
-  const profilesPath = path.join(__dirname, '../../data/profiles.json');
-
-  if (!fs.existsSync(profilesPath)) return [];
-
-  const profiles = JSON.parse(fs.readFileSync(profilesPath, 'utf8')) as Record<string, Profile>;
+async function getDueRoutinesFromProfiles(now?: Date): Promise<DueRoutine[]> {
+  const profiles = await profileStore.getAll();
   const due: DueRoutine[] = [];
 
   for (const [userId, profile] of Object.entries(profiles)) {
@@ -185,12 +177,58 @@ function getDueRoutinesFromProfiles(now?: Date): DueRoutine[] {
 
     for (const t of times) {
       if (isWithinWindow(t, tz, 10, now)) {
-        due.push({ userId, routineId: `json:${userId}`, scheduledTime: t, profile });
+        due.push({ userId, routineId: `pg-profile:${userId}`, scheduledTime: t, profile });
       }
     }
   }
 
   return due;
+}
+
+// ─── One-shot reminders ───────────────────────────────────────────────────────
+
+interface OneShotRow { id: string; userId: string; message: string; fireAt: Date }
+const inMemoryOneShots: OneShotRow[] = [];
+
+export async function scheduleOneShot(userId: string, message: string, fireAt: Date): Promise<void> {
+  const id = `os_${userId}_${fireAt.getTime()}`;
+  try {
+    await db.query(
+      `INSERT INTO one_shot_reminders (id, user_id, message, fire_at)
+       VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
+      [id, userId, message, fireAt.toISOString()]
+    );
+  } catch {
+    inMemoryOneShots.push({ id, userId, message, fireAt });
+  }
+}
+
+async function fireOneShotReminders(sendFn: SendFn): Promise<void> {
+  const now = new Date();
+  try {
+    const result = await db.query(
+      `SELECT id, user_id, message FROM one_shot_reminders
+       WHERE fire_at <= $1 AND sent = false`,
+      [now.toISOString()]
+    );
+    if (result && result.rows.length > 0) {
+      for (const row of result.rows as { id: string; user_id: string; message: string }[]) {
+        await sendFn(row.user_id, row.message);
+        await db.query(`UPDATE one_shot_reminders SET sent = true WHERE id = $1`, [row.id]);
+        console.log(`[scheduler] Fired one-shot reminder for ${row.user_id}`);
+      }
+      return;
+    }
+  } catch (err) {
+    console.warn('[scheduler] one_shot DB query failed, using in-memory fallback:', (err as Error).message);
+  }
+  // In-memory fallback
+  const due = inMemoryOneShots.filter((r) => r.fireAt <= now);
+  for (const r of due) {
+    await sendFn(r.userId, r.message);
+    inMemoryOneShots.splice(inMemoryOneShots.indexOf(r), 1);
+    console.log(`[scheduler] Fired in-memory one-shot reminder for ${r.userId}`);
+  }
 }
 
 // ─── Sent-log helpers (DB-backed, in-memory fallback) ────────────────────────
@@ -236,7 +274,7 @@ type SendFn = (userId: string, message: string) => Promise<void>;
 
 // Sent 2–4 hours after a reminder that received no Y/N reply, once per day.
 async function sendFollowUpNudges(sendFn: SendFn): Promise<void> {
-  const allProfiles = profileStore.getAll();
+  const allProfiles = await profileStore.getAll();
   const now = new Date();
 
   for (const profile of Object.values(allProfiles)) {
@@ -277,7 +315,7 @@ async function sendFollowUpNudges(sendFn: SendFn): Promise<void> {
 
     try {
       await sendFn(profile.userId, nudge);
-      profileStore.upsert(profile.userId, { followUpSentAt: today });
+      await profileStore.upsert(profile.userId, { followUpSentAt: today });
       console.log(`[scheduler] Sent follow-up nudge to ${profile.userId}`);
     } catch (err) {
       console.error(`[scheduler] Follow-up nudge error for ${profile.userId}:`, (err as Error).message);
@@ -293,13 +331,14 @@ async function sendFollowUpNudges(sendFn: SendFn): Promise<void> {
  * Polling interval is 5 minutes by default.
  *
  * @param sendFn - Async function that delivers a message to the user
- * @param intervalMs - Polling interval in milliseconds (default: 5 min)
+ * @param intervalMs - Polling interval in milliseconds (default: 1 min)
  */
-export function startPolling(sendFn: SendFn, intervalMs = 5 * 60 * 1000): NodeJS.Timeout {
+export function startPolling(sendFn: SendFn, intervalMs = 60 * 1000): NodeJS.Timeout {
   console.log(`[scheduler] Polling every ${intervalMs / 1000}s for due routines`);
 
   const tick = async () => {
     try {
+      await fireOneShotReminders(sendFn);
       await sendFollowUpNudges(sendFn);
 
       const due = await getDueRoutines();
@@ -316,7 +355,7 @@ export function startPolling(sendFn: SendFn, intervalMs = 5 * 60 * 1000): NodeJS
         const noReply     = lastSent && (!lastReply || lastReply < lastSent);
         if (noReply) {
           nonResponses += 1;
-          profileStore.upsert(userId, { consecutiveNonResponses: nonResponses });
+          await profileStore.upsert(userId, { consecutiveNonResponses: nonResponses });
         }
 
         const now = new Date();
@@ -383,7 +422,7 @@ export function startPolling(sendFn: SendFn, intervalMs = 5 * 60 * 1000): NodeJS
 
         await sendFn(userId, message);
         await markSent(userId, scheduledTime, profile?.timezone);
-        profileStore.upsert(userId, {
+        await profileStore.upsert(userId, {
           lastReminderSentAt:    now.toISOString(),
           lastOutboundMessage:   message,
           lastShortNotification: decisionMeta.short_notification,

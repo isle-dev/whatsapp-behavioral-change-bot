@@ -134,6 +134,51 @@ function buildTimesFromWindows(windows: ReminderWindow[]): string[] {
   return [...new Set((windows || []).map((w) => WINDOW_TIMES[w]).filter(Boolean))].sort();
 }
 
+// ─── Progress indicator ───────────────────────────────────────────────────────
+
+const MAIN_STEP_ORDER: OnboardingStepName[] = [
+  'WELCOME', 'TIMEZONE', 'MED_TIMING', 'CHECKIN_FREQ',
+  'WEEKDAY_ROUTINE', 'MED_ANCHOR', 'STORAGE_LOCATION', 'MEMORY_AIDS',
+  'WEEKEND_ROUTINE', 'SCHEDULE_TYPE', 'YESTERDAY_ADHERENCE',
+  'GENERAL_BARRIERS', 'SOCIAL_SUPPORT', 'NECESSITY_BELIEF',
+  'CONCERNS_BELIEF', 'ILLNESS_UNDERSTANDING', 'TONE',
+];
+
+const BARRIER_STEP_ORDER: OnboardingStepName[] = [
+  'WELCOME', 'TIMEZONE', 'MED_TIMING', 'CHECKIN_FREQ',
+  'WEEKDAY_ROUTINE', 'MED_ANCHOR', 'STORAGE_LOCATION', 'MEMORY_AIDS',
+  'WEEKEND_ROUTINE', 'SCHEDULE_TYPE', 'YESTERDAY_ADHERENCE', 'YESTERDAY_BARRIER',
+  'GENERAL_BARRIERS', 'SOCIAL_SUPPORT', 'NECESSITY_BELIEF',
+  'CONCERNS_BELIEF', 'ILLNESS_UNDERSTANDING', 'TONE',
+];
+
+const NON_PROGRESS_STEPS = new Set<OnboardingStepName>(['CONFIRM', 'DONE']);
+
+function getStepProgress(step: OnboardingStepName, p: Profile): { current: number; total: number } | null {
+  if (NON_PROGRESS_STEPS.has(step)) return null;
+  const order = p.yesterdayAdherence === false ? BARRIER_STEP_ORDER : MAIN_STEP_ORDER;
+  const idx = order.indexOf(step);
+  if (idx === -1) return null;
+  return { current: idx + 1, total: order.length };
+}
+
+function buildProgressLine(current: number, total: number): string {
+  const pct = Math.round((current / total) * 100);
+  const filled = Math.round((current / total) * 17);
+  const bar = '▓'.repeat(filled) + '▸'.repeat(17 - filled);
+  return `*Step ${current} of ${total}* ${bar} (${pct}%)`;
+}
+
+function promptWithProgress(
+  step: OnboardingStepName,
+  p: Profile
+): { text: string; interactive?: InteractiveMessage } {
+  const msg = STEPS[step].prompt(p);
+  const progress = getStepProgress(step, p);
+  if (!progress) return msg;
+  return { ...msg, text: `${buildProgressLine(progress.current, progress.total)}\n\n${msg.text}` };
+}
+
 // ─── Field → step mapping for "change X" corrections ────────────────────────
 
 const FIELD_TO_STEP: Record<string, OnboardingStepName> = {
@@ -848,11 +893,11 @@ async function persistTraitProfile(userId: string, p: Profile): Promise<void> {
 // ─── Main entry point ────────────────────────────────────────────────────────
 
 async function processMessage(userId: string, input: string, location?: WaLocation): Promise<BotResult> {
-  let p = profileStore.get(userId);
+  let p = await profileStore.get(userId);
   if (!p) {
     p = { userId, onboardingStep: 'WELCOME', onboardingComplete: false, createdAt: new Date().toISOString() };
-    profileStore.upsert(userId, p);
-    return { messages: [STEPS.WELCOME.prompt(p).text] };
+    await profileStore.upsert(userId, p);
+    return { messages: [promptWithProgress('WELCOME', p).text] };
   }
 
   const raw = (input || '').trim();
@@ -863,7 +908,7 @@ async function processMessage(userId: string, input: string, location?: WaLocati
   if (lower === 'help') {
     const step = p.onboardingStep || 'WELCOME';
     const stepDef = STEPS[step];
-    const promptMsg = stepDef ? stepDef.prompt(p).text : '';
+    const promptMsg = stepDef ? promptWithProgress(step, p).text : '';
     return {
       messages: [
         `💡 *Help*\n\nType *skip* to use a default.\nType *restart* to start over.\nType *change [field]* to edit a previous answer.\nFields: name, timezone, medication time, check-in frequency, tone`,
@@ -874,8 +919,8 @@ async function processMessage(userId: string, input: string, location?: WaLocati
 
   if (lower === 'restart') {
     p = { userId, onboardingStep: 'WELCOME', onboardingComplete: false, createdAt: p.createdAt };
-    profileStore.upsert(userId, p);
-    const msg = STEPS.WELCOME.prompt(p);
+    await profileStore.upsert(userId, p);
+    const msg = promptWithProgress('WELCOME', p);
     return { messages: ['🔄 Starting over!', msg.text] };
   }
 
@@ -885,8 +930,8 @@ async function processMessage(userId: string, input: string, location?: WaLocati
     const step = fieldToStep(changeMatch[1]);
     if (step) {
       p.onboardingStep = step;
-      profileStore.upsert(userId, p);
-      const msg = STEPS[step].prompt(p);
+      await profileStore.upsert(userId, p);
+      const msg = promptWithProgress(step, p);
       return { messages: [msg.text], interactive: msg.interactive };
     }
   }
@@ -896,7 +941,7 @@ async function processMessage(userId: string, input: string, location?: WaLocati
     const tz = await inferTimezoneFromLocation(location.latitude, location.longitude);
     if (tz) {
       STEPS.TIMEZONE.apply!(tz, p);
-      profileStore.upsert(userId, p);
+      await profileStore.upsert(userId, p);
       await logResponse(userId, 'TIMEZONE', '__location__', tz);
       const nextStep = p.onboardingStep;
       if (!nextStep || p.onboardingComplete) {
@@ -904,15 +949,14 @@ async function processMessage(userId: string, input: string, location?: WaLocati
         await persistTraitProfile(userId, p);
         return { messages: [STEPS.DONE.prompt(p).text] };
       }
-      const nextDef = STEPS[nextStep];
-      const nextMsg = nextDef.prompt(p);
+      const nextMsg = promptWithProgress(nextStep, p);
       return {
         messages: [`📍 Got it — timezone set to *${tz}* based on your location.`, nextMsg.text],
         interactive: nextMsg.interactive,
       };
     }
     // Inference failed — fall through to prompt the user to type it
-    const tzMsg = STEPS.TIMEZONE.prompt(p);
+    const tzMsg = promptWithProgress('TIMEZONE', p);
     return {
       messages: ["Sorry, I couldn't detect your timezone from that location. Please select or type it:", tzMsg.text],
       interactive: tzMsg.interactive,
@@ -925,8 +969,8 @@ async function processMessage(userId: string, input: string, location?: WaLocati
 
   if (!stepDef) {
     p.onboardingStep = 'WELCOME';
-    profileStore.upsert(userId, p);
-    const msg = STEPS.WELCOME.prompt(p);
+    await profileStore.upsert(userId, p);
+    const msg = promptWithProgress('WELCOME', p);
     return { messages: [msg.text] };
   }
 
@@ -941,7 +985,7 @@ async function processMessage(userId: string, input: string, location?: WaLocati
   }
 
   stepDef.apply!(parsed.value, p);
-  profileStore.upsert(userId, p);
+  await profileStore.upsert(userId, p);
 
   await logResponse(userId, step, raw, parsed.value);
 
@@ -959,16 +1003,16 @@ async function processMessage(userId: string, input: string, location?: WaLocati
   const nextDef = STEPS[nextStep];
   if (!nextDef) return { messages: ['✅ Setup complete!'] };
 
-  const nextMsg = nextDef.prompt(p);
+  const nextMsg = promptWithProgress(nextStep, p);
   return { messages: [nextMsg.text], interactive: nextMsg.interactive };
 }
 
-function isComplete(userId: string): boolean {
+async function isComplete(userId: string): Promise<boolean> {
   return profileStore.isOnboardingComplete(userId);
 }
 
-function getStep(userId: string): OnboardingStepName {
-  const p = profileStore.get(userId);
+async function getStep(userId: string): Promise<OnboardingStepName> {
+  const p = await profileStore.get(userId);
   return p ? (p.onboardingStep || 'WELCOME') : 'WELCOME';
 }
 

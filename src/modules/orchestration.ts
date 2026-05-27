@@ -4,8 +4,9 @@ import * as onboarding from './onboarding';
 import * as profileStore from './profile';
 import * as monitor from './monitor';
 import * as db from './db';
+import { scheduleOneShot } from './scheduler';
 import { chat } from '../services/chatter';
-import { BotResult, ProfileUpdate, ProfileUpdateField, WaLocation } from '../types';
+import { BotResult, Profile, ProfileUpdate, ProfileUpdateField, WaLocation } from '../types';
 
 // ─── Natural language profile update detection ────────────────────────────────
 
@@ -60,10 +61,11 @@ const FIELD_PATTERNS: FieldPattern[] = [
       return t ? { field: 'wakeTime' as ProfileUpdateField, value: t, label: 'wake time', syncDb: true } : null;
     },
   },
-  // Reminder times
+  // Reminder times (recurring — "remind me at X", "remind me every day at X", etc.)
   {
     patterns: [
       /\b(?:remind(?:ers?)?\s+(?:me\s+)?at|set\s+(?:my\s+)?reminders?\s+to|i\s+want\s+reminders?\s+at|my\s+reminder\s+times?\s+(?:are|is))\s+([^\n]+)/i,
+      /\bremind\s+me\s+(?:every(?:\s+day)?|daily|each\s+day|every\s+(?:morning|evening|night))\s+at\s+([^\.,!?\n]+)/i,
     ],
     extract(m) {
       const times = parseMultipleTimes(m[1]);
@@ -105,6 +107,81 @@ const FIELD_PATTERNS: FieldPattern[] = [
   },
 ];
 
+// ─── One-shot reminder parsing ────────────────────────────────────────────────
+
+function parseOneShotDelay(text: string): { fireAt: Date; label: string } | null {
+  const s = text.toLowerCase();
+  const now = new Date();
+
+  // "in X minutes"
+  const minsMatch = s.match(/\bin\s+(\d+)\s+min(?:utes?)?/);
+  if (minsMatch) {
+    const mins = parseInt(minsMatch[1]);
+    if (mins > 0 && mins <= 1440) {
+      const fireAt = new Date(now.getTime() + mins * 60_000);
+      return { fireAt, label: `${mins} minute${mins !== 1 ? 's' : ''}` };
+    }
+  }
+
+  // "in X hours"
+  const hoursMatch = s.match(/\bin\s+(\d+(?:\.\d+)?)\s+hours?/);
+  if (hoursMatch) {
+    const hours = parseFloat(hoursMatch[1]);
+    if (hours > 0 && hours <= 24) {
+      const fireAt = new Date(now.getTime() + hours * 3_600_000);
+      return { fireAt, label: `${hours === 1 ? '1 hour' : `${hours} hours`}` };
+    }
+  }
+
+  // "in an hour"
+  if (/\bin\s+an?\s+hour/.test(s)) {
+    return { fireAt: new Date(now.getTime() + 3_600_000), label: '1 hour' };
+  }
+
+  // "in half an hour" / "in a half hour"
+  if (/\bin\s+(?:a\s+)?half\s+(?:an?\s+)?hour/.test(s)) {
+    return { fireAt: new Date(now.getTime() + 1_800_000), label: '30 minutes' };
+  }
+
+  // "at Xpm" / "at X:XX" — one-shot only when NOT paired with "every/daily/recurring"
+  if (!/\bevery\b|\bdaily\b|\beach\s+day\b/.test(s)) {
+    const atMatch = s.match(/\bat\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)/);
+    if (atMatch) {
+      const parsed = onboarding.parseTime(atMatch[1].trim());
+      if (parsed) {
+        const [h, m] = parsed.split(':').map(Number);
+        const fireAt = new Date(now);
+        fireAt.setHours(h, m, 0, 0);
+        if (fireAt <= now) fireAt.setDate(fireAt.getDate() + 1);
+        const displayHour = h % 12 || 12;
+        const ampm = h < 12 ? 'am' : 'pm';
+        return { fireAt, label: `${displayHour}:${String(m).padStart(2, '0')}${ampm}` };
+      }
+    }
+  }
+
+  return null;
+}
+
+function isOneShotRequest(text: string): boolean {
+  return /\bremind\s+me\b/i.test(text) || /\bset\s+(?:a\s+)?reminder\b/i.test(text);
+}
+
+function buildOneShotMessage(profile: Profile | null): string {
+  const name = profile?.name ?? 'there';
+  const tone = profile?.tone ?? 'encouraging';
+  if (tone === 'empathetic') return `Hi ${name} — just a gentle reminder to take your medication. 💙 Reply *Y* when you're ready.`;
+  if (tone === 'encouraging') return `Hey ${name}! 💊 This is your reminder to take your medication. Reply *Y* when you've taken it!`;
+  return `Medication reminder. Reply *Y* taken / *N* missed.`;
+}
+
+function formatFireAt(fireAt: Date, timezone?: string): string {
+  return fireAt.toLocaleTimeString('en-US', {
+    hour: 'numeric', minute: '2-digit', hour12: true,
+    ...(timezone ? { timeZone: timezone } : {}),
+  });
+}
+
 function detectProfileUpdate(text: string): ProfileUpdate | null {
   for (const { patterns, extract } of FIELD_PATTERNS) {
     for (const re of patterns) {
@@ -119,7 +196,7 @@ function detectProfileUpdate(text: string): ProfileUpdate | null {
 }
 
 async function handleProfileUpdate(userId: string, update: ProfileUpdate): Promise<BotResult | null> {
-  const p = profileStore.get(userId);
+  const p = await profileStore.get(userId);
   if (!p) return null;
 
   switch (update.field) {
@@ -145,7 +222,7 @@ async function handleProfileUpdate(userId: string, update: ProfileUpdate): Promi
       break;
   }
 
-  profileStore.upsert(userId, p);
+  await profileStore.upsert(userId, p);
 
   if (update.syncDb) {
     try {
@@ -169,8 +246,8 @@ async function handleProfileUpdate(userId: string, update: ProfileUpdate): Promi
 
 // ─── Post-onboarding command handlers ────────────────────────────────────────
 
-function handleTone(userId: string, tone: string): BotResult {
-  profileStore.upsert(userId, { tone: tone as 'encouraging' | 'empathetic' | 'neutral' });
+async function handleTone(userId: string, tone: string): Promise<BotResult> {
+  await profileStore.upsert(userId, { tone: tone as 'encouraging' | 'empathetic' | 'neutral' });
   return { messages: [`✅ Tone updated to *${tone}*.`] };
 }
 
@@ -187,7 +264,11 @@ function handleHelp(): BotResult {
       `*Tone: encouraging|empathetic|neutral* — change reminder style\n` +
       `*Change [setting]* — update timezone, wake time, reminders, etc.\n` +
       `*Reset* — delete all your data and start over\n` +
-      `*Help* — show this menu`,
+      `*Help* — show this menu\n\n` +
+      `⏰ *Reminders*\n` +
+      `_Remind me in 10 minutes_\n` +
+      `_Remind me at 3pm_\n` +
+      `_Remind me every day at 8am_`,
     ],
   };
 }
@@ -216,8 +297,8 @@ async function handleStats(userId: string, tone: string = 'encouraging'): Promis
   return { messages: [lines.join('\n')] };
 }
 
-function handleSettings(userId: string): BotResult {
-  const p = profileStore.get(userId);
+async function handleSettings(userId: string): Promise<BotResult> {
+  const p = await profileStore.get(userId);
   if (!p) return { messages: [`No profile found. Something went wrong.`] };
 
   const times     = (p.reminderTimes ?? []).join(', ') || 'not set';
@@ -243,7 +324,7 @@ function handleSettings(userId: string): BotResult {
   };
 }
 
-function handlePause(userId: string, lower: string): BotResult {
+async function handlePause(userId: string, lower: string): Promise<BotResult> {
   const now = new Date();
   let until: Date;
   let label: string;
@@ -262,12 +343,12 @@ function handlePause(userId: string, lower: string): BotResult {
     label = 'the rest of today';
   }
 
-  profileStore.upsert(userId, { pausedUntil: until.toISOString() });
+  await profileStore.upsert(userId, { pausedUntil: until.toISOString() });
   return { messages: [`⏸️ Reminders paused for ${label}. Say *Resume* whenever you're ready.`] };
 }
 
-function handleResume(userId: string): BotResult {
-  profileStore.upsert(userId, { pausedUntil: undefined, consecutiveNonResponses: 0 });
+async function handleResume(userId: string): Promise<BotResult> {
+  await profileStore.upsert(userId, { pausedUntil: undefined, consecutiveNonResponses: 0 });
   return { messages: [`▶️ Reminders are back on. I'll remind you at your scheduled times.`] };
 }
 
@@ -316,11 +397,11 @@ function buildLocalTime(timezone?: string): string {
 
 async function processInbound(userId: string, text: string, location?: WaLocation): Promise<BotResult> {
   const lower = (text || '').trim().toLowerCase();
-  const p = profileStore.get(userId);
+  const p = await profileStore.get(userId);
 
   // Global reset — works at any stage
-  if (lower === 'reset') {
-    profileStore.remove(userId);
+  if (lower === 'reset' || lower === '*reset') {
+    await profileStore.remove(userId);
     await monitor.clearUser(userId);
     await db.query('DELETE FROM routines WHERE user_id = $1', [userId]);
     await db.query('DELETE FROM sent_log WHERE user_id = $1', [userId]);
@@ -345,12 +426,12 @@ async function processInbound(userId: string, text: string, location?: WaLocatio
   // Y/N/Help clear the flag without capturing; any other text is the barrier reply.
   if (p.pendingBarrierCapture) {
     if (lower === 'y' || lower === 'yes' || lower === 'n' || lower === 'no' || lower === 'help') {
-      profileStore.upsert(userId, { pendingBarrierCapture: false });
+      await profileStore.upsert(userId, { pendingBarrierCapture: false });
       // Fall through so Y/N are still processed normally below
     } else {
       const barrier = text.trim();
       await monitor.amendLastBarrier(userId, barrier);
-      profileStore.upsert(userId, { pendingBarrierCapture: false });
+      await profileStore.upsert(userId, { pendingBarrierCapture: false });
       return { messages: ["Thanks for sharing that. I've noted it to help personalise your support. 💙"] };
     }
   }
@@ -362,12 +443,12 @@ async function processInbound(userId: string, text: string, location?: WaLocatio
 
   // Tone command
   const toneMatch = lower.match(/^tone:\s*(encouraging|empathetic|neutral)$/);
-  if (toneMatch) return handleTone(userId, toneMatch[1]);
+  if (toneMatch) return await handleTone(userId, toneMatch[1]);
 
   // Adherence logging (Y / N) — resets the non-response counter
   if (lower === 'y' || lower === 'yes') {
     await monitor.logDose(userId, true, { source: 'self_report' });
-    profileStore.upsert(userId, {
+    await profileStore.upsert(userId, {
       consecutiveNonResponses: 0,
       lastResponseAt: new Date().toISOString(),
       pendingBarrierCapture: false,
@@ -382,7 +463,7 @@ async function processInbound(userId: string, text: string, location?: WaLocatio
   }
   if (lower === 'n' || lower === 'no') {
     await monitor.logDose(userId, false, { source: 'self_report' });
-    profileStore.upsert(userId, {
+    await profileStore.upsert(userId, {
       consecutiveNonResponses: 0,
       lastResponseAt: new Date().toISOString(),
       pendingBarrierCapture: true,
@@ -397,18 +478,29 @@ async function processInbound(userId: string, text: string, location?: WaLocatio
   }
 
   if (lower === 'settings' || lower === 'status') {
-    return handleSettings(userId);
+    return await handleSettings(userId);
   }
 
   if (/^(pause|snooze)(\s|$)/i.test(lower) || lower === 'pause' || lower === 'snooze') {
-    return handlePause(userId, lower);
+    return await handlePause(userId, lower);
   }
 
   if (lower === 'resume') {
-    return handleResume(userId);
+    return await handleResume(userId);
   }
 
-  // Natural language profile updates
+  // One-shot reminders: "remind me in 10 minutes", "remind me at 3pm"
+  if (isOneShotRequest(text)) {
+    const delay = parseOneShotDelay(text);
+    if (delay) {
+      const message = buildOneShotMessage(p);
+      await scheduleOneShot(userId, message, delay.fireAt);
+      const displayTime = formatFireAt(delay.fireAt, p?.timezone);
+      return { messages: [`⏰ Got it — I'll remind you at *${displayTime}*.`] };
+    }
+  }
+
+  // Natural language profile updates (including "remind me every day at X")
   const profileUpdate = detectProfileUpdate(text);
   if (profileUpdate) {
     const updateResult = await handleProfileUpdate(userId, profileUpdate);
@@ -437,7 +529,7 @@ async function processInbound(userId: string, text: string, location?: WaLocatio
       return { messages: [CRISIS_MESSAGE] };
     }
 
-    profileStore.upsert(userId, {
+    await profileStore.upsert(userId, {
       lastOutboundMessage: result.message,
       lastUserMessage:     text,
       lastLlmComBTags:     result.com_b_tags,

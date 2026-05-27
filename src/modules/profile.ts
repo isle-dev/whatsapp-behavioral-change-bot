@@ -1,56 +1,50 @@
-// Patient profile store — reads/writes data/profiles.json.
-// Onboarding state is persisted here; routine scheduling metadata goes to Postgres.
-import fs from 'fs';
-import path from 'path';
+import * as db from './db';
 import { Profile, ProfilesStore } from '../types';
 
-const DATA_DIR = path.join(__dirname, '../../data');
-const PROFILES_PATH = path.join(DATA_DIR, 'profiles.json');
-
-function ensureDataDir(): void {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+export async function get(userId: string): Promise<Profile | null> {
+  const result = await db.query(
+    'SELECT data FROM profiles WHERE user_id = $1',
+    [userId]
+  );
+  if (!result || result.rows.length === 0) return null;
+  return result.rows[0].data as Profile;
 }
 
-function readAll(): ProfilesStore {
-  ensureDataDir();
-  if (!fs.existsSync(PROFILES_PATH)) return {};
-  try {
-    return JSON.parse(fs.readFileSync(PROFILES_PATH, 'utf8')) as ProfilesStore;
-  } catch (_) {
-    return {};
-  }
+export async function upsert(userId: string, updates: Partial<Profile>): Promise<Profile> {
+  const existing = await get(userId);
+  const now = new Date().toISOString();
+  const merged: Profile = {
+    ...(existing ?? { userId, createdAt: now }),
+    ...updates,
+    updatedAt: now,
+  } as Profile;
+
+  await db.query(
+    `INSERT INTO profiles (user_id, data, updated_at)
+     VALUES ($1, $2, NOW())
+     ON CONFLICT (user_id) DO UPDATE
+       SET data = $2, updated_at = NOW()`,
+    [userId, JSON.stringify(merged)]
+  );
+  return merged;
 }
 
-function writeAll(profiles: ProfilesStore): void {
-  ensureDataDir();
-  fs.writeFileSync(PROFILES_PATH, JSON.stringify(profiles, null, 2));
-}
-
-function get(userId: string): Profile | null {
-  return readAll()[userId] || null;
-}
-
-function upsert(userId: string, updates: Partial<Profile>): Profile {
-  const all = readAll();
-  const existing = all[userId] || { userId, createdAt: new Date().toISOString() };
-  all[userId] = { ...existing, ...updates, updatedAt: new Date().toISOString() } as Profile;
-  writeAll(all);
-  return all[userId];
-}
-
-function isOnboardingComplete(userId: string): boolean {
-  const p = get(userId);
+export async function isOnboardingComplete(userId: string): Promise<boolean> {
+  const p = await get(userId);
   return !!(p && p.onboardingComplete);
 }
 
-function getAll(): ProfilesStore {
-  return readAll();
+export async function getAll(): Promise<ProfilesStore> {
+  const result = await db.query('SELECT data FROM profiles');
+  if (!result || result.rows.length === 0) return {};
+  const store: ProfilesStore = {};
+  for (const row of result.rows) {
+    const p = row.data as Profile;
+    store[p.userId] = p;
+  }
+  return store;
 }
 
-function remove(userId: string): void {
-  const all = readAll();
-  delete all[userId];
-  writeAll(all);
+export async function remove(userId: string): Promise<void> {
+  await db.query('DELETE FROM profiles WHERE user_id = $1', [userId]);
 }
-
-export { get, upsert, isOnboardingComplete, remove, getAll };
