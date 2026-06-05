@@ -164,16 +164,19 @@ class WhatsAppBot {
       const result = await processInbound(message.from, strippedBody, location);
       const replies = result.messages || [];
 
-      let sent: Message | undefined;
+      if (replies.length === 0) return;
+      // Track EVERY sent message id, not just the last one. When a reply has
+      // multiple parts, the untracked earlier parts would otherwise come back
+      // through the `message_create` (fromMe) handler and be reprocessed as if
+      // the user had sent them — making the bot answer itself.
       for (const reply of replies) {
-        sent = await this.sendMessage(message.from, reply);
-      }
-      if (!sent && replies.length === 0) return;
-      if (sent && sent.id && (sent.id._serialized || sent.id.id)) {
-        const sid = sent.id._serialized || sent.id.id;
-        this.sentMessageIds.add(sid);
-        if (this.sentMessageIds.size > 2000) {
-          this.sentMessageIds = new Set(Array.from(this.sentMessageIds).slice(-1000));
+        const sent = await this.sendMessage(message.from, reply);
+        if (sent && sent.id && (sent.id._serialized || sent.id.id)) {
+          const sid = sent.id._serialized || sent.id.id;
+          this.sentMessageIds.add(sid);
+          if (this.sentMessageIds.size > 2000) {
+            this.sentMessageIds = new Set(Array.from(this.sentMessageIds).slice(-1000));
+          }
         }
       }
 
