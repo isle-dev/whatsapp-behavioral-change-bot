@@ -115,6 +115,7 @@ function extractInput(message: WaMessage): string {
 }
 
 async function handleIncomingMessage(message: WaMessage): Promise<void> {
+  let result: Awaited<ReturnType<typeof processInbound>> | undefined;
   try {
     const from = message.from;
     const input = extractInput(message);
@@ -124,7 +125,7 @@ async function handleIncomingMessage(message: WaMessage): Promise<void> {
 
     if (!input.trim() && !location) return;
 
-    const result = await processInbound(from, input, location);
+    result = await processInbound(from, input, location);
 
     for (const text of result.messages || []) {
       const isLast = text === (result.messages || []).at(-1);
@@ -136,6 +137,13 @@ async function handleIncomingMessage(message: WaMessage): Promise<void> {
     }
   } catch (error) {
     console.error('❌ Error handling incoming message:', error);
+    // Delivery failed — undo any onboarding step advance so the user's next
+    // reply is parsed against the question they actually saw, not the next one.
+    try {
+      await result?.rollback?.();
+    } catch (rbErr) {
+      console.error('❌ Rollback after failed send also failed:', rbErr);
+    }
     await sendTextMessage(message.from, "I'm sorry, something went wrong. Please try again.");
   }
 }
@@ -144,16 +152,38 @@ export async function sendTextMessage(to: string, text: string): Promise<unknown
   return sendWhatsAppPayload(to, { type: 'text', text: { body: text } });
 }
 
+// The Cloud API rejects the whole message if any reply button title exceeds
+// 20 characters. A rejected send throws *after* the onboarding step has already
+// advanced, which desyncs the conversation. Clamp titles defensively so an
+// over-length title can never break a send again.
+const MAX_BUTTON_TITLE = 20;
+
+function sanitizeInteractive(interactive: InteractiveMessage): InteractiveMessage {
+  const buttons = interactive.action?.buttons;
+  if (!buttons) return interactive;
+  return {
+    ...interactive,
+    action: {
+      ...interactive.action,
+      buttons: buttons.map((b) => ({
+        ...b,
+        reply: { ...b.reply, title: (b.reply.title || '').slice(0, MAX_BUTTON_TITLE) },
+      })),
+    },
+  };
+}
+
 async function sendInteractiveMessage(
   to: string,
   fallbackText: string,
   interactive: InteractiveMessage
 ): Promise<unknown> {
+  const safe = sanitizeInteractive(interactive);
   const payload = {
     type: 'interactive',
     interactive: {
-      ...interactive,
-      body: interactive.body || { text: fallbackText },
+      ...safe,
+      body: safe.body || { text: fallbackText },
     },
   };
   return sendWhatsAppPayload(to, payload);

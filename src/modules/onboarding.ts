@@ -111,6 +111,22 @@ function parseTime(input: string): string | null {
   return null;
 }
 
+// ─── Numbered-choice normalizer ──────────────────────────────────────────────
+// Numbered questions previously required an exact "1".."N". Real answers often
+// carry stray characters ("1.", " 1 ", "1)"), so a clean choice was rejected.
+// This trims, lowercases, and — when the input is purely numeric/punctuation —
+// collapses it to a single option digit IF exactly one valid option is present.
+// Genuinely ambiguous input like "1 3" (two valid options) is left untouched so
+// the caller still re-prompts rather than guessing.
+function normalizeChoice(input: string, maxOption: number): string {
+  const s = (input || '').trim().toLowerCase();
+  if (/[a-z]/.test(s)) return s; // keyword, IANA zone, or button id → leave as-is
+  const valid = new Set(
+    (s.match(/\d+/g) || []).map(Number).filter((d) => d >= 1 && d <= maxOption)
+  );
+  return valid.size === 1 ? String([...valid][0]) : s;
+}
+
 // ─── Helper: map MedTiming to reminder times ─────────────────────────────────
 
 function timesFromMedTiming(mt: MedTiming): string[] {
@@ -211,7 +227,7 @@ const STEPS: Record<OnboardingStepName, OnboardingStep<unknown>> = {
       };
     },
     parse(input): ParseResult<string> {
-      const s = (input || '').trim().toLowerCase();
+      const s = normalizeChoice(input, 5);
       if (s === 'tz_eastern' || s === '1' || s.includes('eastern')) return { value: 'America/New_York' };
       if (s === 'tz_central'  || s === '2' || s.includes('central'))  return { value: 'America/Chicago' };
       if (s === 'tz_mountain' || s === '3' || s.includes('mountain')) return { value: 'America/Denver' };
@@ -238,7 +254,7 @@ const STEPS: Record<OnboardingStepName, OnboardingStep<unknown>> = {
       };
     },
     parse(input): ParseResult<MedTiming> {
-      const s = (input || '').trim().toLowerCase();
+      const s = normalizeChoice(input, 4);
       if (s === '1' || s.includes('morning'))   return { value: 'morning' };
       if (s === '2' || s.includes('afternoon')) return { value: 'afternoon' };
       if (s === '3' || s.includes('evening'))   return { value: 'evening' };
@@ -273,7 +289,7 @@ const STEPS: Record<OnboardingStepName, OnboardingStep<unknown>> = {
       };
     },
     parse(input): ParseResult<CheckinFrequency> {
-      const s = (input || '').trim().toLowerCase();
+      const s = normalizeChoice(input, 3);
       if (s === 'freq_daily' || s === '1' || s.includes('every day') || s.includes('daily')) return { value: 'daily' };
       if (s === 'freq_few'   || s === '2' || s.includes('few'))  return { value: 'few_times_week' };
       if (s === 'freq_once'  || s === '3' || s.includes('once')) return { value: 'once_week' };
@@ -314,7 +330,7 @@ const STEPS: Record<OnboardingStepName, OnboardingStep<unknown>> = {
       };
     },
     parse(input): ParseResult<string> {
-      const s = (input || '').trim().toLowerCase();
+      const s = normalizeChoice(input, 5);
       if (s === '1' || s.includes('breakfast')) return { value: 'breakfast' };
       if (s === '2' || s.includes('coffee'))    return { value: 'coffee' };
       if (s === '3' || s.includes('teeth') || s.includes('brush')) return { value: 'teeth' };
@@ -337,7 +353,7 @@ const STEPS: Record<OnboardingStepName, OnboardingStep<unknown>> = {
       };
     },
     parse(input): ParseResult<string> {
-      const s = (input || '').trim().toLowerCase();
+      const s = normalizeChoice(input, 4);
       if (s === '1' || s.includes('kitchen') || s === 'skip') return { value: 'kitchen' };
       if (s === '2' || s.includes('bedroom')) return { value: 'bedroom' };
       if (s === '3' || s.includes('bathroom')) return { value: 'bathroom' };
@@ -359,7 +375,7 @@ const STEPS: Record<OnboardingStepName, OnboardingStep<unknown>> = {
       };
     },
     parse(input): ParseResult<string> {
-      const s = (input || '').trim().toLowerCase();
+      const s = normalizeChoice(input, 4);
       if (s === '1' || s.includes('alarm') || s.includes('phone')) return { value: 'alarm' };
       if (s === '2' || s.includes('organizer') || s.includes('organiser') || s.includes('pill')) return { value: 'organizer' };
       if (s === '3' || s.includes('family') || s.includes('friend') || s.includes('person')) return { value: 'person' };
@@ -392,7 +408,7 @@ const STEPS: Record<OnboardingStepName, OnboardingStep<unknown>> = {
       };
     },
     parse(input): ParseResult<string> {
-      const s = (input || '').trim().toLowerCase();
+      const s = normalizeChoice(input, 3);
       if (s === 'wknd_same'  || s === '1' || s.includes('same') || s === 'skip') return { value: 'same' };
       if (s === 'wknd_little' || s === '2' || s.includes('little') || s.includes('bit')) return { value: 'little' };
       if (s === 'wknd_different' || s === '3' || s.includes('quite') || s.includes('different')) return { value: 'different' };
@@ -424,7 +440,7 @@ const STEPS: Record<OnboardingStepName, OnboardingStep<unknown>> = {
       };
     },
     parse(input): ParseResult<string> {
-      const s = (input || '').trim().toLowerCase();
+      const s = normalizeChoice(input, 3);
       if (s === 'sched_consistent' || s === '1' || s.includes('consistent') || s === 'skip') return { value: 'consistent' };
       if (s === 'sched_varies'     || s === '2' || s.includes('varies') || s.includes('bit'))    return { value: 'varies' };
       if (s === 'sched_irregular'  || s === '3' || s.includes('irregular') || s.includes('shift')) return { value: 'irregular' };
@@ -455,7 +471,7 @@ const STEPS: Record<OnboardingStepName, OnboardingStep<unknown>> = {
       };
     },
     parse(input): ParseResult<boolean> {
-      const s = (input || '').trim().toLowerCase();
+      const s = normalizeChoice(input, 2);
       if (s === 'yadh_yes' || s === '1' || s === 'yes' || s === 'y' || s === 'skip') return { value: true };
       if (s === 'yadh_no'  || s === '2' || s === 'no'  || s === 'n')                 return { value: false };
       return { error: 'Please reply *Yes* or *No*.' };
@@ -518,14 +534,14 @@ const STEPS: Record<OnboardingStepName, OnboardingStep<unknown>> = {
             buttons: [
               { type: 'reply', reply: { id: 'ss_yes',  title: 'Yes' } },
               { type: 'reply', reply: { id: 'ss_no',   title: 'No' } },
-              { type: 'reply', reply: { id: 'ss_want', title: "I'd like help but don't have it" } },
+              { type: 'reply', reply: { id: 'ss_want', title: "I'd like some help" } },
             ],
           },
         } as InteractiveMessage,
       };
     },
     parse(input): ParseResult<SocialSupport> {
-      const s = (input || '').trim().toLowerCase();
+      const s = normalizeChoice(input, 3);
       if (s === 'ss_yes'  || s === '1' || s === 'yes' || s === 'y') return { value: 'yes' };
       if (s === 'ss_no'   || s === '2' || s === 'no'  || s === 'n' || s === 'skip') return { value: 'no' };
       if (s === 'ss_want' || s === '3' || s.includes('like') || s.includes('want')) return { value: 'want_but_dont' };
@@ -550,14 +566,14 @@ const STEPS: Record<OnboardingStepName, OnboardingStep<unknown>> = {
             buttons: [
               { type: 'reply', reply: { id: 'nb_important', title: "It's important" } },
               { type: 'reply', reply: { id: 'nb_doubts',    title: 'I have some doubts' } },
-              { type: 'reply', reply: { id: 'nb_notsure',   title: "I'm not sure I need it" } },
+              { type: 'reply', reply: { id: 'nb_notsure',   title: "Not sure I need it" } },
             ],
           },
         } as InteractiveMessage,
       };
     },
     parse(input): ParseResult<NecessityBelief> {
-      const s = (input || '').trim().toLowerCase();
+      const s = normalizeChoice(input, 3);
       if (s === 'nb_important' || s === '1' || s.includes('important') || s === 'skip') return { value: 'important' };
       if (s === 'nb_doubts'    || s === '2' || s.includes('doubt'))  return { value: 'some_doubts' };
       if (s === 'nb_notsure'   || s === '3' || s.includes('not sure') || s.includes('unsure')) return { value: 'not_sure' };
@@ -589,7 +605,7 @@ const STEPS: Record<OnboardingStepName, OnboardingStep<unknown>> = {
       };
     },
     parse(input): ParseResult<ConcernsBelief> {
-      const s = (input || '').trim().toLowerCase();
+      const s = normalizeChoice(input, 3);
       if (s === 'cb_notrly' || s === '1' || s.includes('not really') || s === 'skip') return { value: 'not_really' };
       if (s === 'cb_little' || s === '2' || s.includes('little') || s.includes('bit')) return { value: 'a_little' };
       if (s === 'cb_quite'  || s === '3' || s.includes('quite') || s.includes('lot'))  return { value: 'quite_a_bit' };
@@ -621,7 +637,7 @@ const STEPS: Record<OnboardingStepName, OnboardingStep<unknown>> = {
       };
     },
     parse(input): ParseResult<IllnessUnderstanding> {
-      const s = (input || '').trim().toLowerCase();
+      const s = normalizeChoice(input, 3);
       if (s === 'iu_knew'  || s === '1' || s.includes('knew') || s === 'skip') return { value: 'knew' };
       if (s === 'iu_heard' || s === '2' || s.includes('heard'))  return { value: 'heard' };
       if (s === 'iu_didnt' || s === '3' || s.includes("didn't") || s.includes('didnt') || s.includes('no')) return { value: 'didnt_know' };
@@ -653,7 +669,7 @@ const STEPS: Record<OnboardingStepName, OnboardingStep<unknown>> = {
       };
     },
     parse(input): ParseResult<ToneValue> {
-      const s = (input || '').trim().toLowerCase();
+      const s = normalizeChoice(input, 3);
       if (s === 'tone_neutral'     || s === '1' || s.includes('direct') || s.includes('neutral')) return { value: 'neutral' };
       if (s === 'tone_encouraging' || s === '2' || s.includes('encour')) return { value: 'encouraging' };
       if (s === 'tone_empathetic'  || s === '3' || s.includes('empath')) return { value: 'empathetic' };

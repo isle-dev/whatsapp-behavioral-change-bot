@@ -118,6 +118,10 @@ export interface WaLocation {
 export interface BotResult {
   messages: string[];
   interactive?: InteractiveMessage;
+  // Called by the transport ONLY if delivery of `messages` fails. Undoes any
+  // onboarding step advance made while producing this result, so a failed send
+  // never leaves the conversation ahead of the question the user actually saw.
+  rollback?: () => Promise<void> | void;
 }
 
 export interface ProfileUpdate {

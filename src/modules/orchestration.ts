@@ -5,7 +5,7 @@ import * as profileStore from './profile';
 import * as monitor from './monitor';
 import * as db from './db';
 import { chat } from '../services/chatter';
-import { BotResult, ProfileUpdate, ProfileUpdateField, WaLocation } from '../types';
+import { BotResult, OnboardingStepName, ProfileUpdate, ProfileUpdateField, WaLocation } from '../types';
 
 // ─── Natural language profile update detection ────────────────────────────────
 
@@ -314,6 +314,26 @@ function buildLocalTime(timezone?: string): string {
 
 // ─── Main router ──────────────────────────────────────────────────────────────
 
+// Attach a rollback that restores the onboarding step pointer (and completion
+// flag) to where it was before this message advanced it. The transport invokes
+// it only when delivery fails, so the user's next reply lands on the same step.
+function withOnboardingRollback(
+  userId: string,
+  prevStep: OnboardingStepName | undefined,
+  prevComplete: boolean,
+  result: BotResult
+): BotResult {
+  if (!result.rollback) {
+    result.rollback = () => {
+      profileStore.upsert(userId, {
+        onboardingStep: prevStep ?? 'WELCOME',
+        onboardingComplete: prevComplete,
+      });
+    };
+  }
+  return result;
+}
+
 async function processInbound(userId: string, text: string, location?: WaLocation): Promise<BotResult> {
   const lower = (text || '').trim().toLowerCase();
   const p = profileStore.get(userId);
@@ -329,6 +349,8 @@ async function processInbound(userId: string, text: string, location?: WaLocatio
 
   // New user or mid-onboarding → route to onboarding state machine
   if (!p || !p.onboardingComplete) {
+    const prevStep = p?.onboardingStep;
+    const prevComplete = p?.onboardingComplete ?? false;
     const result = await onboarding.processMessage(userId, text, location);
     // Prepend a resumption greeting when a user returns mid-flow after a gap (>1 hour).
     // updatedAt is refreshed on every profile write, so this fires at most once per session.
@@ -338,7 +360,7 @@ async function processInbound(userId: string, text: string, location?: WaLocatio
         result.messages = [`Welcome back! 👋 Let's pick up where we left off — you're almost done with setup.`, ...result.messages];
       }
     }
-    return result;
+    return withOnboardingRollback(userId, prevStep, prevComplete, result);
   }
 
   // Pending barrier capture — must run before other command checks.
@@ -357,7 +379,10 @@ async function processInbound(userId: string, text: string, location?: WaLocatio
 
   // "change X" corrections re-enter onboarding at the relevant step
   if (/^change\s+/i.test(lower)) {
-    return onboarding.processMessage(userId, text, location);
+    const prevStep = p?.onboardingStep;
+    const prevComplete = p?.onboardingComplete ?? false;
+    const result = await onboarding.processMessage(userId, text, location);
+    return withOnboardingRollback(userId, prevStep, prevComplete, result);
   }
 
   // Tone command

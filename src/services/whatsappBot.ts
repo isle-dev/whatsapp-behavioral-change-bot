@@ -110,6 +110,7 @@ class WhatsAppBot {
   }
 
   async handleMessage(message: Message): Promise<void> {
+    let result: Awaited<ReturnType<typeof processInbound>> | undefined;
     try {
       const messageId =
         (message.id && (message.id._serialized || message.id.id)) ||
@@ -161,7 +162,7 @@ class WhatsAppBot {
 
       console.log('   🔄 Processing message...');
 
-      const result = await processInbound(message.from, strippedBody, location);
+      result = await processInbound(message.from, strippedBody, location);
       const replies = result.messages || [];
 
       if (replies.length === 0) return;
@@ -188,6 +189,14 @@ class WhatsAppBot {
       console.error(`   📝 Original message: "${message.body}"`);
       console.error(`   🚨 Error: ${(error as Error).message}`);
       console.error(`   📍 Stack: ${(error as Error).stack}\n`);
+
+      // Delivery failed — undo any onboarding step advance so the user's next
+      // reply is parsed against the question they actually saw, not the next one.
+      try {
+        await result?.rollback?.();
+      } catch (rbErr) {
+        console.error('   ⚠️  Rollback after failed send also failed:', (rbErr as Error).message);
+      }
 
       const errorMessage = "I'm sorry, I encountered an error processing your message. Please try again.";
       console.log('   🔄 Sending error message to user...');
