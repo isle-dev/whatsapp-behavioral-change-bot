@@ -41,7 +41,7 @@ RUN addgroup -g 1001 -S nodejs && \
 
 # Entrypoint fixes volume ownership at runtime then drops to chatbot user
 COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+RUN sed -i 's/\r//' /entrypoint.sh && chmod +x /entrypoint.sh
 
 # Expose port
 EXPOSE 3000
