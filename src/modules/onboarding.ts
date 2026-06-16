@@ -237,18 +237,43 @@ const STEPS: Record<OnboardingStepName, OnboardingStep<unknown>> = {
         text: `When do you usually take your blood pressure medication?\n\n1️⃣ Morning\n2️⃣ Afternoon\n3️⃣ Evening\n4️⃣ It varies\n\nType *skip* for morning.`,
       };
     },
-    parse(input): ParseResult<MedTiming> {
+    parse(input): ParseResult<MedTiming | string[]> {
       const s = (input || '').trim().toLowerCase();
-      if (s === '1' || s.includes('morning'))   return { value: 'morning' };
-      if (s === '2' || s.includes('afternoon')) return { value: 'afternoon' };
-      if (s === '3' || s.includes('evening'))   return { value: 'evening' };
-      if (s === '4' || s.includes('varies') || s.includes('vary') || s.includes('different')) return { value: 'varies' };
       if (s === 'skip') return { value: DEFAULTS.medTiming };
-      return { error: 'Please reply *1* (Morning), *2* (Afternoon), *3* (Evening), or *4* (It varies).' };
+      if (s === '4' || s.includes('varies') || s.includes('vary') || s.includes('different')) return { value: 'varies' };
+
+      // Map keywords and digit choices to canonical times
+      const numToTime: Record<string, string> = { '1': '08:00', '2': '14:00', '3': '20:00' };
+      const wordToTime: Array<[RegExp, string]> = [
+        [/morning/, '08:00'],
+        [/afternoon/, '14:00'],
+        [/evening/, '20:00'],
+      ];
+
+      const times = new Set<string>();
+      for (const [re, t] of wordToTime) { if (re.test(s)) times.add(t); }
+      for (const [digit, t] of Object.entries(numToTime)) {
+        if (new RegExp(`\\b${digit}\\b`).test(s)) times.add(t);
+      }
+
+      if (times.size === 1) {
+        const [t] = times;
+        if (t === '08:00') return { value: 'morning' };
+        if (t === '14:00') return { value: 'afternoon' };
+        if (t === '20:00') return { value: 'evening' };
+      }
+      if (times.size > 1) return { value: [...times].sort() };
+
+      return { error: 'Please reply *1* (Morning), *2* (Afternoon), *3* (Evening), or *4* (It varies). You can pick more than one, e.g. *1 and 3*.' };
     },
     apply(value, p) {
-      p.medTiming = value as MedTiming;
-      p.reminderTimes = timesFromMedTiming(value as MedTiming);
+      if (Array.isArray(value)) {
+        p.medTiming = 'varies';
+        p.reminderTimes = value as string[];
+      } else {
+        p.medTiming = value as MedTiming;
+        p.reminderTimes = timesFromMedTiming(value as MedTiming);
+      }
       p.onboardingStep = 'CHECKIN_FREQ';
       return p;
     },
