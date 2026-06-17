@@ -110,6 +110,7 @@ class WhatsAppBot {
   }
 
   async handleMessage(message: Message): Promise<void> {
+    let result: Awaited<ReturnType<typeof processInbound>> | undefined;
     try {
       const messageId =
         (message.id && (message.id._serialized || message.id.id)) ||
@@ -161,19 +162,22 @@ class WhatsAppBot {
 
       console.log('   🔄 Processing message...');
 
-      const result = await processInbound(message.from, strippedBody, location);
+      result = await processInbound(message.from, strippedBody, location);
       const replies = result.messages || [];
 
-      let sent: Message | undefined;
+      if (replies.length === 0) return;
+      // Track EVERY sent message id, not just the last one. When a reply has
+      // multiple parts, the untracked earlier parts would otherwise come back
+      // through the `message_create` (fromMe) handler and be reprocessed as if
+      // the user had sent them — making the bot answer itself.
       for (const reply of replies) {
-        sent = await this.sendMessage(message.from, reply);
-      }
-      if (!sent && replies.length === 0) return;
-      if (sent && sent.id && (sent.id._serialized || sent.id.id)) {
-        const sid = sent.id._serialized || sent.id.id;
-        this.sentMessageIds.add(sid);
-        if (this.sentMessageIds.size > 2000) {
-          this.sentMessageIds = new Set(Array.from(this.sentMessageIds).slice(-1000));
+        const sent = await this.sendMessage(message.from, reply);
+        if (sent && sent.id && (sent.id._serialized || sent.id.id)) {
+          const sid = sent.id._serialized || sent.id.id;
+          this.sentMessageIds.add(sid);
+          if (this.sentMessageIds.size > 2000) {
+            this.sentMessageIds = new Set(Array.from(this.sentMessageIds).slice(-1000));
+          }
         }
       }
 
@@ -185,6 +189,14 @@ class WhatsAppBot {
       console.error(`   📝 Original message: "${message.body}"`);
       console.error(`   🚨 Error: ${(error as Error).message}`);
       console.error(`   📍 Stack: ${(error as Error).stack}\n`);
+
+      // Delivery failed — undo any onboarding step advance so the user's next
+      // reply is parsed against the question they actually saw, not the next one.
+      try {
+        await result?.rollback?.();
+      } catch (rbErr) {
+        console.error('   ⚠️  Rollback after failed send also failed:', (rbErr as Error).message);
+      }
 
       const errorMessage = "I'm sorry, I encountered an error processing your message. Please try again.";
       console.log('   🔄 Sending error message to user...');

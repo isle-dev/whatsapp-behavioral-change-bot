@@ -21,6 +21,7 @@ interface WaInteractive {
   list_reply?: WaListReply;
 }
 interface WaMessage {
+  id?: string;
   from: string;
   type: 'text' | 'interactive' | 'location' | string;
   text?: WaTextContent;
@@ -57,25 +58,49 @@ router.get('/', (req: Request, res: Response) => {
   }
 });
 
-// Webhook message endpoint
-router.post('/', async (req: Request, res: Response) => {
-  try {
-    const body = req.body as WaWebhookBody;
+// Dedup guard: the Cloud API re-delivers the *same* message (same id) with
+// exponential backoff whenever it doesn't receive a fast HTTP 200. Without this,
+// one user message gets reprocessed repeatedly — the bot fires off questions "at
+// random times" with no new user input. We remember ids we've already handled.
+const processedMessageIds = new Set<string>();
+const MAX_TRACKED_IDS = 5000;
 
-    if (body.object === 'whatsapp_business_account') {
-      for (const entry of body.entry || []) {
-        for (const change of entry.changes || []) {
-          for (const message of change.value?.messages || []) {
-            await handleIncomingMessage(message);
-          }
+function alreadyProcessed(id: string | undefined): boolean {
+  if (!id) return false; // no id → can't dedup; process it
+  if (processedMessageIds.has(id)) return true;
+  processedMessageIds.add(id);
+  if (processedMessageIds.size > MAX_TRACKED_IDS) {
+    // Drop the oldest half (insertion order is preserved by Set)
+    for (const old of Array.from(processedMessageIds).slice(0, MAX_TRACKED_IDS / 2)) {
+      processedMessageIds.delete(old);
+    }
+  }
+  return false;
+}
+
+// Webhook message endpoint
+router.post('/', (req: Request, res: Response) => {
+  const body = req.body as WaWebhookBody;
+
+  // ACK immediately so Meta never times out and never retries this delivery.
+  // Any work that follows happens after the response is already on its way.
+  res.sendStatus(200);
+
+  if (body.object !== 'whatsapp_business_account') return;
+
+  for (const entry of body.entry || []) {
+    for (const change of entry.changes || []) {
+      // `change.value.statuses` (delivery/read receipts) carry no `.messages`,
+      // so they're naturally skipped here.
+      for (const message of change.value?.messages || []) {
+        if (alreadyProcessed(message.id)) {
+          console.log(`🔁 Skipping duplicate webhook delivery: ${message.id}`);
+          continue;
         }
+        // Fire-and-forget: errors are handled inside handleIncomingMessage.
+        void handleIncomingMessage(message);
       }
     }
-
-    res.sendStatus(200);
-  } catch (error) {
-    console.error('❌ Webhook error:', error);
-    res.sendStatus(500);
   }
 });
 
@@ -90,6 +115,7 @@ function extractInput(message: WaMessage): string {
 }
 
 async function handleIncomingMessage(message: WaMessage): Promise<void> {
+  let result: Awaited<ReturnType<typeof processInbound>> | undefined;
   try {
     const from = message.from;
     const input = extractInput(message);
@@ -99,7 +125,7 @@ async function handleIncomingMessage(message: WaMessage): Promise<void> {
 
     if (!input.trim() && !location) return;
 
-    const result = await processInbound(from, input, location);
+    result = await processInbound(from, input, location);
 
     for (const text of result.messages || []) {
       const isLast = text === (result.messages || []).at(-1);
@@ -111,6 +137,13 @@ async function handleIncomingMessage(message: WaMessage): Promise<void> {
     }
   } catch (error) {
     console.error('❌ Error handling incoming message:', error);
+    // Delivery failed — undo any onboarding step advance so the user's next
+    // reply is parsed against the question they actually saw, not the next one.
+    try {
+      await result?.rollback?.();
+    } catch (rbErr) {
+      console.error('❌ Rollback after failed send also failed:', rbErr);
+    }
     await sendTextMessage(message.from, "I'm sorry, something went wrong. Please try again.");
   }
 }
@@ -119,16 +152,38 @@ export async function sendTextMessage(to: string, text: string): Promise<unknown
   return sendWhatsAppPayload(to, { type: 'text', text: { body: text } });
 }
 
+// The Cloud API rejects the whole message if any reply button title exceeds
+// 20 characters. A rejected send throws *after* the onboarding step has already
+// advanced, which desyncs the conversation. Clamp titles defensively so an
+// over-length title can never break a send again.
+const MAX_BUTTON_TITLE = 20;
+
+function sanitizeInteractive(interactive: InteractiveMessage): InteractiveMessage {
+  const buttons = interactive.action?.buttons;
+  if (!buttons) return interactive;
+  return {
+    ...interactive,
+    action: {
+      ...interactive.action,
+      buttons: buttons.map((b) => ({
+        ...b,
+        reply: { ...b.reply, title: (b.reply.title || '').slice(0, MAX_BUTTON_TITLE) },
+      })),
+    },
+  };
+}
+
 async function sendInteractiveMessage(
   to: string,
   fallbackText: string,
   interactive: InteractiveMessage
 ): Promise<unknown> {
+  const safe = sanitizeInteractive(interactive);
   const payload = {
     type: 'interactive',
     interactive: {
-      ...interactive,
-      body: interactive.body || { text: fallbackText },
+      ...safe,
+      body: safe.body || { text: fallbackText },
     },
   };
   return sendWhatsAppPayload(to, payload);
